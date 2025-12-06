@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # --- NGINX ---
+  nginx:
+    image: nginx:alpine
+    container_name: api_gateway
+    restart: always
+    ports:
+      - "8000:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - auth_service
+      - marketplace_service
+    networks:
+      - api_network
+
+  # --- СЕРВИС АУТЕНТИФИКАЦИИ ---
+  auth_service:
+    build: ./backend/auth_service
+    container_name: auth_api
+    restart: always
+    expose:
+      - "8001"
+    # Мы собираем DATABASE_URL из переменных .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      SECRET_KEY: ${SECRET_KEY}
+      SMTP_SERVER: ${SMTP_SERVER}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      EMAILS_FROM_EMAIL: ${EMAILS_FROM_EMAIL}
+    depends_on:
+      - postgres_db
+    networks:
+      - api_network
+
+  # --- СЕРВИС ПАРСИНГА ---
+  marketplace_service:
+    build: ./backend/marketplace_service
+    container_name: marketplace_api
+    restart: always
+    expose:
+      - "8002"
+    environment:
+      DISPLAY: ":99"
+    cap_add:
+      - SYS_ADMIN
+    shm_size: 2gb
+    networks:
+      - api_network
+
+  # --- БАЗА ДАННЫХ ---
+  postgres_db:
+    image: postgres:15-alpine
+    container_name: auth_postgres
+    restart: always
+    # Передаем переменные напрямую из .env файла
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - api_network
+
+volumes:
+  postgres_data:
+
+networks:
+  api_network:
+    driver: bridge
