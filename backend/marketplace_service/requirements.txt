@@ -6,3 +6,4 @@ selenium-stealth
 beautifulsoup4
 undetected-chromedriver
 pyvirtualdisplay
+slowapi
