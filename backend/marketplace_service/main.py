@@ -99,6 +99,14 @@ class WebDriverPool:
         return await self._available.get()
 
     async def release(self, driver):
+        # ОЧИСТКА ПЕРЕД ВОЗВРАТОМ
+        def clean_driver(d):
+            try:
+                d.delete_all_cookies()
+            except Exception:
+                pass # Если драйвер завис, это обработается позже
+
+        await asyncio.to_thread(clean_driver, driver)
         await self._available.put(driver)
 
     async def get_with_semaphore(self):
