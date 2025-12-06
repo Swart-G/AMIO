@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pydantic
+selenium
+selenium-stealth
+beautifulsoup4
+undetected-chromedriver
+pyvirtualdisplay
