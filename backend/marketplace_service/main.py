@@ -36,6 +36,7 @@ class UnifiedProductsResponse(BaseModel):
     items: List[ProductItem]
 
 
+# Обновленный класс пула
 class WebDriverPool:
     def __init__(self, pool_size: int = 2):
         self.pool_size = pool_size
@@ -58,11 +59,13 @@ class WebDriverPool:
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
+        # Обязательно отключаем загрузку картинок и CSS для скорости (у вас уже есть, но проверьте)
         prefs = {
             "profile.managed_default_content_settings.images": 2,
             "profile.managed_default_content_settings.stylesheet": 2,
         }
         options.add_experimental_option("prefs", prefs)
+
         driver = webdriver.Chrome(options=options)
         stealth(driver,
                 languages=["ru-RU", "ru"],
@@ -77,7 +80,29 @@ class WebDriverPool:
         return await self._available.get()
 
     async def release(self, driver):
+        # ОЧИСТКА ПЕРЕД ВОЗВРАТОМ
+        def clean_driver(d):
+            try:
+                d.delete_all_cookies()
+            except Exception:
+                pass # Если драйвер завис, это обработается позже
+
+        await asyncio.to_thread(clean_driver, driver)
         await self._available.put(driver)
+
+    # Добавим метод для замены "умершего" драйвера
+    async def invalidate(self, driver):
+        try:
+            await asyncio.to_thread(driver.quit)
+        except:
+            pass
+        if driver in self._drivers:
+            self._drivers.remove(driver)
+
+        # Создаем новый взамен
+        new_d = await asyncio.to_thread(self._new_driver)
+        self._drivers.append(new_d)
+        await self._available.put(new_d)
 
     def cleanup(self):
         for driver in self._drivers:
@@ -86,8 +111,8 @@ class WebDriverPool:
             except:
                 pass
 
+driver_pool = WebDriverPool(pool_size=6)
 
-driver_pool = WebDriverPool(pool_size=4)
 
 
 @app.on_event("startup")
@@ -318,26 +343,46 @@ async def get_products(
 ):
     if not isinstance(q, str) or not q:
         raise HTTPException(status_code=400, detail="Параметр 'q' обязателен")
+
     drivers = []
     try:
+        # Берем 2 драйвера
         for _ in range(2):
             drivers.append(await driver_pool.acquire())
+
         tasks = [
             collect_wb(drivers[0], q, MAX_ITEMS),
             collect_ozon(drivers[1], q, MAX_ITEMS)
         ]
-        results = await asyncio.gather(*tasks)
-        all_items = [ProductItem(**item) for part in results for item in part]
+
+        # Запускаем сбор
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Обработка результатов и ошибок
+        final_items = []
+        for i, res in enumerate(results):
+            if isinstance(res, Exception):
+                logging.error(f"Task {i} failed: {res}")
+                # Если была критическая ошибка, можно пометить драйвер как плохой,
+                # но для простоты просто вернем пустой список
+            elif isinstance(res, list):
+                final_items.extend(res)
+
+        all_items = [ProductItem(**item) for item in final_items]
+
     finally:
+        # Возвращаем драйверы в пул
         for d in drivers:
+            # Проверяем жив ли драйвер (простой пинг url) или просто очищаем
+            # Для надежности, если Ozon часто банит, лучше использовать invalidate при таймаутах
             await driver_pool.release(d)
-    # Лимитируем на уровне ответа - не больше 50 карточек на всё
+
     return UnifiedProductsResponse(query=q, count=len(all_items), items=all_items[:MAX_ITEMS])
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "5.0.2"}
+    return {"status": "ok", "version": "5.1.0"}
 
 
 if __name__ == "__main__":
