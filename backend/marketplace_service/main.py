@@ -16,7 +16,7 @@ import logging
 MAX_ITEMS = 50
 
 logging.basicConfig(level=logging.INFO)
-app = FastAPI(title="Unified Marketplace API", version="5.0.0")
+app = FastAPI(title="Unified Marketplace API", version="5.1.0")
 _virtual_display = None
 
 
@@ -36,7 +36,6 @@ class UnifiedProductsResponse(BaseModel):
     items: List[ProductItem]
 
 
-# Обновленный класс пула
 class WebDriverPool:
     def __init__(self, pool_size: int = 2):
         self.pool_size = pool_size
@@ -59,13 +58,11 @@ class WebDriverPool:
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
-        # Обязательно отключаем загрузку картинок и CSS для скорости (у вас уже есть, но проверьте)
         prefs = {
             "profile.managed_default_content_settings.images": 2,
             "profile.managed_default_content_settings.stylesheet": 2,
         }
         options.add_experimental_option("prefs", prefs)
-
         driver = webdriver.Chrome(options=options)
         stealth(driver,
                 languages=["ru-RU", "ru"],
@@ -80,29 +77,7 @@ class WebDriverPool:
         return await self._available.get()
 
     async def release(self, driver):
-        # ОЧИСТКА ПЕРЕД ВОЗВРАТОМ
-        def clean_driver(d):
-            try:
-                d.delete_all_cookies()
-            except Exception:
-                pass # Если драйвер завис, это обработается позже
-
-        await asyncio.to_thread(clean_driver, driver)
         await self._available.put(driver)
-
-    # Добавим метод для замены "умершего" драйвера
-    async def invalidate(self, driver):
-        try:
-            await asyncio.to_thread(driver.quit)
-        except:
-            pass
-        if driver in self._drivers:
-            self._drivers.remove(driver)
-
-        # Создаем новый взамен
-        new_d = await asyncio.to_thread(self._new_driver)
-        self._drivers.append(new_d)
-        await self._available.put(new_d)
 
     def cleanup(self):
         for driver in self._drivers:
@@ -111,8 +86,8 @@ class WebDriverPool:
             except:
                 pass
 
-driver_pool = WebDriverPool(pool_size=6)
 
+driver_pool = WebDriverPool(pool_size=4)
 
 
 @app.on_event("startup")
@@ -212,66 +187,76 @@ def parse_wb(html: str, seen: Set[str], left: int) -> List[dict]:
 def parse_ozon(html: str, seen: Set[str], left: int) -> List[dict]:
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.find_all("div", class_=lambda x: x and "tile-root" in x)
-    if not cards:
-        cards = soup.find_all("div", attrs={"data-widget": "searchResultsV2"})
     marketplace = "ozon"
     results = []
     for card in cards:
         try:
+            # URL
             lnk = card.find("a", href=re.compile(r"/product/"))
             href = lnk.get("href") if lnk and lnk.get("href") else None
-            url = ("https://ozon.ru" + href if href and not href.startswith("http") else href)
+            url = ("https://ozon.ru" + href.split("?")[0] if href and not href.startswith("http") else href)
             if not url or url in seen:
                 continue
 
+            # ===== НАЗВАНИЕ =====
+            # Ищем span с классом tsBody500Medium внутри div с классом bq03_0_4-a
             name = None
-            name_tag = card.find("span", class_=lambda x: x and "tsBody" in x)
-            if name_tag:
-                name = name_tag.get_text(strip=True)
-            elif lnk:
-                name = lnk.get_text(strip=True)
+            name_container = card.find("div", class_=re.compile(r"bq03_0_4-a"))
+            if name_container:
+                name_span = name_container.find("span", class_=re.compile(r"tsBody500Medium"))
+                if name_span:
+                    name = name_span.get_text(strip=True)
 
+            # Fallback: ссылка с классом iv124
+            if not name:
+                name_link = card.find("a", class_=re.compile(r"iv124"))
+                if name_link:
+                    name_div = name_link.find("div", class_=re.compile(r"bq03_0_4-a"))
+                    if name_div:
+                        name = name_div.get_text(strip=True)
+
+            # ===== ЦЕНА =====
             price = None
-            price_block = card.find("span", {"data-test-id": "price-current"})
-            if price_block:
-                price_str = price_block.get_text()
-                price = re.sub(r"[^\d]", "", price_str) if price_str else None
-            else:
-                price_tag = card.find("span", class_=re.compile(r"price"))
-                price_text = price_tag.get_text() if price_tag else card.get_text()
-                pm = re.search(r"(\d[\d\s\u2009\xa0]*\d)\s*₽", price_text)
-                if pm: price = re.sub(r"[^\d]", "", pm.group(1)) if pm.group(1) else None
+            # Цена в span с классом tsHeadline500Medium (актуальная цена)
+            price_tag = card.find("span", class_=re.compile(r"tsHeadline500Medium"))
+            if price_tag:
+                price_text = price_tag.get_text()
+                # Убираем все нецифровые символы (пробелы, ₽, неразрывные пробелы)
+                price = re.sub(r"[^\d]", "", price_text)
 
+            # ===== РЕЙТИНГ =====
             rating = None
-            rating_tag = card.find("span", class_=re.compile(r"rating"))
-            if rating_tag:
-                rating = rating_tag.get_text(strip=True).replace('.', ',')
-                if not re.match(r"\d+[.,]?\d*", rating):
-                    rating = None
-            # fallback: ищем по всем спанам
-            if not rating:
-                for s in card.find_all("span"):
-                    match = re.match(r"\d+[.,]\d+", s.get_text())
+            # Рейтинг в span с color textPremium
+            for s in card.find_all("span"):
+                style = s.get("style", "")
+                if "textPremium" in style:
+                    text = s.get_text(strip=True)
+                    match = re.match(r"(\d+[.,]\d+|\d+)", text)
                     if match:
-                        rating = match.group(0).replace('.', ',')
+                        rating = match.group(1).replace('.', ',')
                         break
 
+            # ===== ОТЗЫВЫ =====
             reviews = None
             for s in card.find_all("span"):
-                txt = s.get_text().lower()
-                if "отзыв" in txt:
-                    nums = re.findall(r"\d+", txt)
+                style = s.get("style", "")
+                if "textSecondary" in style:
+                    txt = s.get_text()
+                    # Заменяем неразрывные пробелы и обычные пробелы
+                    txt_clean = re.sub(r"[\s\u00a0\u2009]+", "", txt)
+                    # Извлекаем число (может быть "1646отзывов" или просто "279")
+                    nums = re.findall(r"\d+", txt_clean)
                     if nums:
                         reviews = nums[0]
                         break
 
+            # ===== КАРТИНКА =====
             img_url = None
-            img = card.find("img")
+            img = card.find("img", class_=re.compile(r"u5i24|b95"))
             if img and img.has_attr("src"):
                 src = img["src"]
-                img_url = (
-                    "https:" + src if src.startswith("//") else src
-                )
+                img_url = "https:" + src if src.startswith("//") else src
+
             item = {
                 "marketplace": marketplace,
                 "name": name,
@@ -316,24 +301,39 @@ async def collect_wb(driver, query: str, limit=MAX_ITEMS):
 async def collect_ozon(driver, query: str, limit=MAX_ITEMS):
     seen = set()
     results = []
-    # Первый — стандартно, второй — с сортировкой по рейтингу
+
     for sorting in [None, "rating"]:
         url = f"https://www.ozon.ru/search/?text={query}&from_global=true"
         if sorting:
             url += f"&sorting={sorting}"
+
         await asyncio.to_thread(driver.get, url)
-        try:
-            WebDriverWait(driver, 8).until(
-                lambda d: len(d.find_elements(By.CSS_SELECTOR, "div[class*='tile-root']")) > 0
-            )
-        except Exception:
-            pass
+
+        # Увеличьте timeout и добавьте повторные попытки
+        wait_time = 12  # Было 8, теперь 12 секунд
+        retries = 3
+
+        for attempt in range(retries):
+            try:
+                WebDriverWait(driver, wait_time).until(
+                    lambda d: len(d.find_elements(By.CSS_SELECTOR, "div[class*='tile-root']")) > 5
+                )
+                break
+            except Exception:
+                if attempt < retries - 1:
+                    await asyncio.sleep(2)  # Подождите перед повтором
+                else:
+                    pass
+
         html = driver.page_source
         left = limit - len(results)
+
         if left <= 0:
             break
+
         res = parse_ozon(html, seen, left)
         results.extend(res)
+
     return results[:limit]
 
 
@@ -343,40 +343,20 @@ async def get_products(
 ):
     if not isinstance(q, str) or not q:
         raise HTTPException(status_code=400, detail="Параметр 'q' обязателен")
-
     drivers = []
     try:
-        # Берем 2 драйвера
         for _ in range(2):
             drivers.append(await driver_pool.acquire())
-
         tasks = [
             collect_wb(drivers[0], q, MAX_ITEMS),
             collect_ozon(drivers[1], q, MAX_ITEMS)
         ]
-
-        # Запускаем сбор
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Обработка результатов и ошибок
-        final_items = []
-        for i, res in enumerate(results):
-            if isinstance(res, Exception):
-                logging.error(f"Task {i} failed: {res}")
-                # Если была критическая ошибка, можно пометить драйвер как плохой,
-                # но для простоты просто вернем пустой список
-            elif isinstance(res, list):
-                final_items.extend(res)
-
-        all_items = [ProductItem(**item) for item in final_items]
-
+        results = await asyncio.gather(*tasks)
+        all_items = [ProductItem(**item) for part in results for item in part]
     finally:
-        # Возвращаем драйверы в пул
         for d in drivers:
-            # Проверяем жив ли драйвер (простой пинг url) или просто очищаем
-            # Для надежности, если Ozon часто банит, лучше использовать invalidate при таймаутах
             await driver_pool.release(d)
-
+    # Лимитируем на уровне ответа - не больше 50 карточек на всё
     return UnifiedProductsResponse(query=q, count=len(all_items), items=all_items[:MAX_ITEMS])
 
 
