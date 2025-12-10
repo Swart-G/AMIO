@@ -2,7 +2,6 @@ from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from typing import Optional
 
-# --- User Schemas ---
 class UserBase(BaseModel):
     email: EmailStr
     name: Optional[str] = None
@@ -13,12 +12,10 @@ class UserCreate(UserBase):
 class UserResponse(UserBase):
     id: int
     created_at: datetime
-    # is_active не обязательно возвращать фронту, но можно если нужно
 
     class Config:
         from_attributes = True
 
-# --- Token Schemas ---
 class TokenData(BaseModel):
     access_token: str
     refresh_token: str
@@ -29,7 +26,6 @@ class AuthResponse(BaseModel):
     user: UserResponse
     tokens: TokenData
 
-# --- Request Schemas ---
 class RegisterResponse(BaseModel):
     message: str
     email: EmailStr

@@ -5,7 +5,6 @@ from email.message import EmailMessage
 import aiosmtplib
 from config import settings
 
-# --- Security ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def verify_password(plain_password, hashed_password):
@@ -33,7 +32,6 @@ def decode_token(token: str):
     except JWTError:
         return None
 
-# --- Email ---
 async def send_email(email_to: str, subject: str, body: str):
     message = EmailMessage()
     message["From"] = settings.EMAILS_FROM_EMAIL

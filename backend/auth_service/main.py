@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Header, APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from datetime import datetime, timedelta  # <--- ИСПРАВЛЕННЫЙ ИМПОРТ
+from datetime import datetime, timedelta
 import contextlib
 import random
 import string
@@ -12,7 +12,6 @@ import schemas
 import utils
 from config import settings
 
-# Создаем таблицы при старте
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
@@ -21,11 +20,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Auth Service", lifespan=lifespan)
 
-# --- Утилита для генерации кода ---
 def generate_verification_code(length=6):
     return ''.join(random.choices(string.digits, k=length))
 
-# --- Dependencies ---
 async def get_current_user(authorization: str = Header(...), db: AsyncSession = Depends(get_db)):
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authentication scheme")
@@ -47,21 +44,17 @@ async def get_current_user(authorization: str = Header(...), db: AsyncSession = 
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
-# --- Routes ---
 auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @auth_router.post("/register", response_model=schemas.RegisterResponse, status_code=201)
 async def register(user_data: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
-    # 1. Проверка на существование
     result = await db.execute(select(models.User).where(models.User.email == user_data.email))
     existing_user = result.scalars().first()
     if existing_user:
         raise HTTPException(status_code=409, detail="Email already registered")
 
-    # 2. Генерация кода
     code = generate_verification_code()
     
-    # 3. Создание пользователя (is_active=False по дефолту)
     hashed_pw = utils.get_password_hash(user_data.password)
     new_user = models.User(
         email=user_data.email, 
@@ -73,7 +66,6 @@ async def register(user_data: schemas.UserCreate, db: AsyncSession = Depends(get
     db.add(new_user)
     await db.commit()
 
-    # 4. Отправка письма
     try:
         await utils.send_email(
             user_data.email,
@@ -102,15 +94,12 @@ async def verify_email(req: schemas.VerifyRequest, db: AsyncSession = Depends(ge
     if user.verification_code != req.code:
         raise HTTPException(status_code=400, detail="Invalid verification code")
 
-    # Активация
     user.is_active = True
-    user.verification_code = None  # Сбрасываем код
+    user.verification_code = None
     
-    # Выдача токенов
     access_token = utils.create_access_token({"sub": user.email})
     refresh_token = utils.create_refresh_token({"sub": user.email})
 
-    # Сохранение refresh токена (ИСПРАВЛЕНО: timedelta)
     db_refresh = models.RefreshToken(
         token=refresh_token, 
         user_id=user.id,
@@ -138,14 +127,12 @@ async def login(creds: schemas.LoginRequest, db: AsyncSession = Depends(get_db))
     if not user or not utils.verify_password(creds.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     
-    # ПРОВЕРКА АКТИВАЦИИ
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account not activated. Please verify your email.")
 
     access_token = utils.create_access_token({"sub": user.email})
     refresh_token = utils.create_refresh_token({"sub": user.email})
 
-    # Сохранение refresh токена (ИСПРАВЛЕНО: timedelta)
     db_refresh = models.RefreshToken(
         token=refresh_token, 
         user_id=user.id,
@@ -187,7 +174,6 @@ async def refresh_token(request: schemas.RefreshRequest, db: AsyncSession = Depe
     new_access = utils.create_access_token({"sub": payload["sub"]})
     new_refresh = utils.create_refresh_token({"sub": payload["sub"]})
     
-    # Сохранение refresh токена (ИСПРАВЛЕНО: timedelta)
     new_db_token = models.RefreshToken(
         token=new_refresh,
         user_id=stored_token.user_id,

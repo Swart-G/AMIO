@@ -1,6 +1,5 @@
 FROM python:3.11-slim
 
-# 1. Устанавливаем зависимости
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
@@ -17,15 +16,12 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Устанавливаем Google Chrome (stable)
 RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
     && apt-get update \
     && apt-get install -y ./google-chrome-stable_current_amd64.deb \
     && rm google-chrome-stable_current_amd64.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Устанавливаем ChromeDriver (Используем jq вместо Python для парсинга JSON)
-# Мы просто берем драйвер для канала "Stable", который всегда соответствует последнему Chrome
 RUN DRIVER_URL=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json" | \
     jq -r '.channels.Stable.downloads.chromedriver[] | select(.platform=="linux64") | .url') \
     && echo "Downloading driver from: $DRIVER_URL" \

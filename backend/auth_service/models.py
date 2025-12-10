@@ -12,11 +12,9 @@ class User(Base):
     name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
-    # Новые поля для активации
     is_active = Column(Boolean, default=False)
     verification_code = Column(String, nullable=True)
 
-    # Связь с токенами
     refresh_tokens = relationship("RefreshToken", back_populates="user")
 
 class RefreshToken(Base):

@@ -19,7 +19,7 @@ MAX_ITEMS = 70          # Максимум товаров в ответе
 CONCURRENT_LIMIT = 5    # Максимум одновременных запросов браузеров
 ENABLE_CACHE = True     # ВКЛ/ВЫКЛ кэширование (True/False)
 CACHE_TTL = 60          # Время жизни кэша в секундах
-POOL_SIZE = 10         # Размер пула браузеров
+POOL_SIZE = 6           # Размер пула браузеров
 # ================================================
 
 logging.basicConfig(level=logging.INFO)
@@ -66,10 +66,9 @@ class WebDriverPool:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080") # Важно для Ozon
+        options.add_argument("--window-size=1920,1080")
         options.add_argument('--disable-blink-features=AutomationControlled')
         
-        # Эмуляция реального пользователя
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         options.add_argument(f'user-agent={user_agent}')
 
@@ -100,12 +99,11 @@ class WebDriverPool:
         return await self._available.get()
 
     async def release(self, driver):
-        # ОЧИСТКА ПЕРЕД ВОЗВРАТОМ
         def clean_driver(d):
             try:
                 d.delete_all_cookies()
             except Exception:
-                pass # Если драйвер завис, это обработается позже
+                pass 
 
         await asyncio.to_thread(clean_driver, driver)
         await self._available.put(driver)
@@ -158,7 +156,6 @@ def valid_product_item(item: dict, seen: Set[str]) -> bool:
     )
 
 def get_from_cache(key: str) -> Optional[dict]:
-    """Получить результат из кэша"""
     if not ENABLE_CACHE:
         return None
         
@@ -172,7 +169,6 @@ def get_from_cache(key: str) -> Optional[dict]:
     return None
 
 def set_to_cache(key: str, data: dict):
-    """Сохранить результат в кэш"""
     if not ENABLE_CACHE:
         return
 
@@ -257,8 +253,6 @@ def parse_wb(html: str, seen: Set[str], left: int) -> List[dict]:
 
 def parse_ozon(html: str, seen: Set[str], left: int) -> List[dict]:
     soup = BeautifulSoup(html, "html.parser")
-    # 1. Поиск карточек: используем стабильный класс 'tile-root'
-    # Ozon часто меняет структуру, но 'tile-root' остается долгое время
     cards = soup.find_all("div", class_=re.compile(r"tile-root"))
     
     marketplace = "ozon"
@@ -266,15 +260,11 @@ def parse_ozon(html: str, seen: Set[str], left: int) -> List[dict]:
 
     for card in cards:
         try:
-            # === URL ===
-            # Ищем ссылку на товар. Обычно это tile-clickable-element
             lnk = card.find("a", class_=re.compile(r"tile-clickable-element"))
             if not lnk:
-                # Фоллбэк: ищем любую ссылку, содержащую /product/
                 lnk = card.find("a", href=re.compile(r"/product/"))
             
             href = lnk.get("href") if lnk else None
-            # Очищаем URL от лишних параметров
             if href:
                 url = "https://ozon.ru" + href.split("?")[0] if not href.startswith("http") else href.split("?")[0]
             else:
@@ -283,70 +273,48 @@ def parse_ozon(html: str, seen: Set[str], left: int) -> List[dict]:
             if not url or url in seen:
                 continue
 
-            # === ЦЕНА (Price) ===
-            # В вашем HTML цена находится в span с классом, содержащим 'tsHeadline500Medium'
-            # Пример: <span class="c35311-a1 tsHeadline500Medium ...">62 864 </span>
+
             price = None
             price_tag = card.find("span", class_=re.compile(r"tsHeadline500Medium"))
             
             if price_tag:
-                # Удаляем все нечисловые символы (пробелы, ₽, &nbsp;)
                 price = re.sub(r"[^\d]", "", price_tag.get_text())
             
-            # Если цена не найдена (например, товара нет в наличии), пропускаем
             if not price:
                 continue
 
-            # === НАЗВАНИЕ (Name) ===
-            # Название обычно лежит в span с классом 'tsBody500Medium' или 'tsBodyL'
-            # В вашем HTML: <span class="tsBody500Medium">Samsung Galaxy S25...</span>
+
             name = None
             name_tag = card.find("span", class_=re.compile(r"tsBody500Medium|tsBodyL"))
             if name_tag:
                 name = name_tag.get_text(strip=True)
             
-            # Фоллбэк для названия: иногда оно просто внутри ссылки tile-clickable-element
             if not name and lnk:
-                # Ищем текст внутри ссылки, исключая цену (если она там вдруг есть)
                 name = lnk.get_text(strip=True)
 
-            # === РЕЙТИНГ (Rating) ===
-            # В вашем HTML рейтинг выделен цветом: style="color: var(--textPremium);"
+
             rating = None
-            # Ищем по специфичному стилю или классу, содержащему 'textPremium' (старый метод) или просто по тексту
             rating_tag = card.find("span", style=re.compile(r"var\(--textPremium\)"))
             if not rating_tag:
-                # Попытка найти по классу
                 rating_tag = card.find("span", class_=re.compile(r"tsBodyControl400Small"))
-                # Но это рискованно, лучше проверять содержимое на формат "X.Y"
             
             if rating_tag:
                 rating_text = rating_tag.get_text(strip=True)
-                # Проверяем, что это число с точкой или запятой (напр. 4.9 или 5.0)
                 if re.match(r"^\d+[.,]\d+$", rating_text):
                     rating = rating_text.replace('.', ',')
 
-            # === ОТЗЫВЫ (Reviews) ===
-            # В HTML отзывы часто имеют цвет 'textSecondary' или 'textTertiary'
-            # Пример: <span style="color: var(--textSecondary);">1 774 </span>
             reviews = None
             reviews_tag = card.find("span", style=re.compile(r"var\(--textSecondary\)"))
             if reviews_tag:
-                # Чистим текст от пробелов и неразрывных пробелов
                 reviews_text = reviews_tag.get_text(strip=True)
-                # Берем только цифры
                 reviews_match = re.findall(r"\d+", re.sub(r"\s+", "", reviews_text))
                 if reviews_match:
                     reviews = "".join(reviews_match)
 
-            # === ИЗОБРАЖЕНИЕ (Image) ===
             img_url = None
-            # Ozon использует lazy loading. Ищем img c классом, похожим на картинку товара
-            # Обычно это самый большой image в карточке или первый
-            img = card.find("img", src=True) # Берем первый попавшийся img в карточке
+            img = card.find("img", src=True)
             if img:
                 src = img.get("src")
-                # Часто реальное фото лежит в srcset или data-src
                 if not src and img.get("srcset"):
                      src = img.get("srcset").split(" ")[0]
                 img_url = src
@@ -368,8 +336,6 @@ def parse_ozon(html: str, seen: Set[str], left: int) -> List[dict]:
                     break
 
         except Exception as e:
-            # Логируем ошибку, но не прерываем цикл
-            # logger.debug(f"Error parsing Ozon card: {e}") 
             continue
 
     return results
@@ -474,7 +440,6 @@ async def get_products(
 
     q = q.strip()
     
-    # 1. Проверяем кэш (если включен)
     cache_key = f"products:{q}"
     cached = get_from_cache(cache_key)
     if cached:
@@ -484,7 +449,6 @@ async def get_products(
     driver2 = None
 
     try:
-        # 2. Ограничиваем конкурентные запросы
         driver1 = await driver_pool.get_with_semaphore()
         driver2 = await driver_pool.get_with_semaphore()
 
@@ -516,7 +480,6 @@ async def get_products(
             "items": final_items
         }
         
-        # 3. Сохраняем в кэш (если включен)
         set_to_cache(cache_key, {
             "query": q,
             "count": len(final_items),
@@ -541,7 +504,6 @@ def health():
 
 @app.get("/cache-stats")
 def cache_stats():
-    """Статистика кэша"""
     return {
         "cache_enabled": ENABLE_CACHE,
         "cache_size": len(_cache),
