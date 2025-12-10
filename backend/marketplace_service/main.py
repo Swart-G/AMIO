@@ -15,10 +15,11 @@ import logging
 from datetime import datetime, timedelta
 
 # ================= КОНФИГУРАЦИЯ =================
-MAX_ITEMS = 50          # Максимум товаров в ответе
+MAX_ITEMS = 70          # Максимум товаров в ответе
 CONCURRENT_LIMIT = 5    # Максимум одновременных запросов браузеров
 ENABLE_CACHE = True     # ВКЛ/ВЫКЛ кэширование (True/False)
 CACHE_TTL = 60          # Время жизни кэша в секундах
+POOL_SIZE = 10         # Размер пула браузеров
 # ================================================
 
 logging.basicConfig(level=logging.INFO)
@@ -125,7 +126,7 @@ class WebDriverPool:
                 pass
         logger.info("WebDriverPool cleaned up")
 
-driver_pool = WebDriverPool(pool_size=4)
+driver_pool = WebDriverPool(pool_size=POOL_SIZE)
 
 @app.on_event("startup")
 async def startup_event():
@@ -256,65 +257,99 @@ def parse_wb(html: str, seen: Set[str], left: int) -> List[dict]:
 
 def parse_ozon(html: str, seen: Set[str], left: int) -> List[dict]:
     soup = BeautifulSoup(html, "html.parser")
-    cards = soup.find_all("div", class_=lambda x: x and "tile-root" in x)
+    # 1. Поиск карточек: используем стабильный класс 'tile-root'
+    # Ozon часто меняет структуру, но 'tile-root' остается долгое время
+    cards = soup.find_all("div", class_=re.compile(r"tile-root"))
+    
     marketplace = "ozon"
     results = []
 
     for card in cards:
         try:
-            lnk = card.find("a", href=re.compile(r"/product/"))
-            href = lnk.get("href") if lnk and lnk.get("href") else None
-            url = "https://ozon.ru" + href.split("?")[0] if href and not href.startswith("http") else href
+            # === URL ===
+            # Ищем ссылку на товар. Обычно это tile-clickable-element
+            lnk = card.find("a", class_=re.compile(r"tile-clickable-element"))
+            if not lnk:
+                # Фоллбэк: ищем любую ссылку, содержащую /product/
+                lnk = card.find("a", href=re.compile(r"/product/"))
+            
+            href = lnk.get("href") if lnk else None
+            # Очищаем URL от лишних параметров
+            if href:
+                url = "https://ozon.ru" + href.split("?")[0] if not href.startswith("http") else href.split("?")[0]
+            else:
+                continue
 
             if not url or url in seen:
                 continue
 
-            name = None
-            name_container = card.find("div", class_=re.compile(r"bq03_0_4-a"))
-            if name_container:
-                name_span = name_container.find("span", class_=re.compile(r"tsBody500Medium"))
-                if name_span:
-                    name = name_span.get_text(strip=True)
-
-            if not name:
-                name_link = card.find("a", class_=re.compile(r"iv124"))
-                if name_link:
-                    name_div = name_link.find("div", class_=re.compile(r"bq03_0_4-a"))
-                    if name_div:
-                        name = name_div.get_text(strip=True)
-
+            # === ЦЕНА (Price) ===
+            # В вашем HTML цена находится в span с классом, содержащим 'tsHeadline500Medium'
+            # Пример: <span class="c35311-a1 tsHeadline500Medium ...">62 864 </span>
             price = None
             price_tag = card.find("span", class_=re.compile(r"tsHeadline500Medium"))
+            
             if price_tag:
-                price_text = price_tag.get_text()
-                price = re.sub(r"[^\d]", "", price_text)
+                # Удаляем все нечисловые символы (пробелы, ₽, &nbsp;)
+                price = re.sub(r"[^\d]", "", price_tag.get_text())
+            
+            # Если цена не найдена (например, товара нет в наличии), пропускаем
+            if not price:
+                continue
 
+            # === НАЗВАНИЕ (Name) ===
+            # Название обычно лежит в span с классом 'tsBody500Medium' или 'tsBodyL'
+            # В вашем HTML: <span class="tsBody500Medium">Samsung Galaxy S25...</span>
+            name = None
+            name_tag = card.find("span", class_=re.compile(r"tsBody500Medium|tsBodyL"))
+            if name_tag:
+                name = name_tag.get_text(strip=True)
+            
+            # Фоллбэк для названия: иногда оно просто внутри ссылки tile-clickable-element
+            if not name and lnk:
+                # Ищем текст внутри ссылки, исключая цену (если она там вдруг есть)
+                name = lnk.get_text(strip=True)
+
+            # === РЕЙТИНГ (Rating) ===
+            # В вашем HTML рейтинг выделен цветом: style="color: var(--textPremium);"
             rating = None
-            for s in card.find_all("span"):
-                style = s.get("style", "")
-                if "textPremium" in style:
-                    text = s.get_text(strip=True)
-                    match = re.match(r"(\d+[.,]\d+|\d+)", text)
-                    if match:
-                        rating = match.group(1).replace('.', ',')
-                        break
+            # Ищем по специфичному стилю или классу, содержащему 'textPremium' (старый метод) или просто по тексту
+            rating_tag = card.find("span", style=re.compile(r"var\(--textPremium\)"))
+            if not rating_tag:
+                # Попытка найти по классу
+                rating_tag = card.find("span", class_=re.compile(r"tsBodyControl400Small"))
+                # Но это рискованно, лучше проверять содержимое на формат "X.Y"
+            
+            if rating_tag:
+                rating_text = rating_tag.get_text(strip=True)
+                # Проверяем, что это число с точкой или запятой (напр. 4.9 или 5.0)
+                if re.match(r"^\d+[.,]\d+$", rating_text):
+                    rating = rating_text.replace('.', ',')
 
+            # === ОТЗЫВЫ (Reviews) ===
+            # В HTML отзывы часто имеют цвет 'textSecondary' или 'textTertiary'
+            # Пример: <span style="color: var(--textSecondary);">1 774 </span>
             reviews = None
-            for s in card.find_all("span"):
-                style = s.get("style", "")
-                if "textSecondary" in style:
-                    txt = s.get_text()
-                    txt_clean = re.sub(r"[\s\u00a0\u2009]+", "", txt)
-                    nums = re.findall(r"\d+", txt_clean)
-                    if nums:
-                        reviews = nums[0]
-                        break
+            reviews_tag = card.find("span", style=re.compile(r"var\(--textSecondary\)"))
+            if reviews_tag:
+                # Чистим текст от пробелов и неразрывных пробелов
+                reviews_text = reviews_tag.get_text(strip=True)
+                # Берем только цифры
+                reviews_match = re.findall(r"\d+", re.sub(r"\s+", "", reviews_text))
+                if reviews_match:
+                    reviews = "".join(reviews_match)
 
+            # === ИЗОБРАЖЕНИЕ (Image) ===
             img_url = None
-            img = card.find("img", class_=re.compile(r"u5i24|b95"))
-            if img and img.has_attr("src"):
-                src = img["src"]
-                img_url = "https:" + src if src.startswith("//") else src
+            # Ozon использует lazy loading. Ищем img c классом, похожим на картинку товара
+            # Обычно это самый большой image в карточке или первый
+            img = card.find("img", src=True) # Берем первый попавшийся img в карточке
+            if img:
+                src = img.get("src")
+                # Часто реальное фото лежит в srcset или data-src
+                if not src and img.get("srcset"):
+                     src = img.get("srcset").split(" ")[0]
+                img_url = src
 
             item = {
                 "marketplace": marketplace,
@@ -333,10 +368,12 @@ def parse_ozon(html: str, seen: Set[str], left: int) -> List[dict]:
                     break
 
         except Exception as e:
-            logger.debug(f"Error parsing Ozon card: {e}")
+            # Логируем ошибку, но не прерываем цикл
+            # logger.debug(f"Error parsing Ozon card: {e}") 
             continue
 
     return results
+
 
 async def collect_wb(driver, query: str, limit=MAX_ITEMS):
     seen = set()
@@ -514,4 +551,4 @@ def cache_stats():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8002)
