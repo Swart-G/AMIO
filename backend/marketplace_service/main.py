@@ -30,7 +30,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException
 
 
-# optional stealth
 try:
     from selenium_stealth import stealth
     HAS_STEALTH = True
@@ -38,7 +37,6 @@ except Exception:
     HAS_STEALTH = False
 
 
-# optional xvfb (Linux without GUI, when running NOT headless)
 try:
     from pyvirtualdisplay import Display
     HAS_XVFB = True
@@ -48,44 +46,43 @@ except Exception:
 
 # ================= CONFIG =================
 
-MAX_ITEMS = int(os.getenv("MAX_ITEMS", "100"))
+MAX_ITEMS = int(os.getenv("MAX_ITEMS", "50"))
 
-ENABLE_CACHE = os.getenv("ENABLE_CACHE", "1") == "0"
-CACHE_TTL = int(os.getenv("CACHE_TTL", "60"))
+ENABLE_CACHE = os.getenv("ENABLE_CACHE", "1") == "1"
+CACHE_TTL = int(os.getenv("CACHE_TTL", "120"))
 
 ENABLE_WB = os.getenv("ENABLE_WB", "1") == "1"
 ENABLE_OZON = os.getenv("ENABLE_OZON", "1") == "1"
 
 # ---------- Ozon Selenium ----------
-OZON_ITEMS = int(os.getenv("OZON_ITEMS", "30"))
-OZON_BROWSER_LIMIT = int(os.getenv("OZON_BROWSER_LIMIT", "1"))  # how many Chromes at once
-OZON_RETRIES = int(os.getenv("OZON_RETRIES", "3"))
-OZON_MIN_ITEMS = int(os.getenv("OZON_MIN_ITEMS", "20"))  # if got less -> retry with new browser
+OZON_ITEMS = int(os.getenv("OZON_ITEMS", "15"))
+OZON_BROWSER_LIMIT = int(os.getenv("OZON_BROWSER_LIMIT", "1"))
+OZON_RETRIES = int(os.getenv("OZON_RETRIES", "2"))
+OZON_MIN_ITEMS = int(os.getenv("OZON_MIN_ITEMS", "10"))
 
-OZON_WAIT_FIRST = int(os.getenv("OZON_WAIT_FIRST", "25"))
-OZON_SCROLL_ROUNDS = int(os.getenv("OZON_SCROLL_ROUNDS", "50"))
-OZON_SCROLL_PAUSE = float(os.getenv("OZON_SCROLL_PAUSE", "1.0"))
+OZON_WAIT_FIRST = int(os.getenv("OZON_WAIT_FIRST", "18"))
+OZON_SCROLL_ROUNDS = int(os.getenv("OZON_SCROLL_ROUNDS", "20"))
+OZON_SCROLL_PAUSE = float(os.getenv("OZON_SCROLL_PAUSE", "0.55"))
 OZON_TILE_SELECTOR = os.getenv("OZON_TILE_SELECTOR", "div[class*='tile-root']")
-OZON_WAIT_NEW_TILES = int(os.getenv("OZON_WAIT_NEW_TILES", "10"))
-OZON_STAGNATION_LIMIT = int(os.getenv("OZON_STAGNATION_LIMIT", "12"))
-OZON_SCROLL_STEP = int(os.getenv("OZON_SCROLL_STEP", "1200"))
+OZON_WAIT_NEW_TILES = int(os.getenv("OZON_WAIT_NEW_TILES", "6"))
+OZON_STAGNATION_LIMIT = int(os.getenv("OZON_STAGNATION_LIMIT", "7"))
+OZON_SCROLL_STEP = int(os.getenv("OZON_SCROLL_STEP", "1500"))
 
-# Chrome runtime
 CHROME_BINARY = os.getenv("CHROME_BINARY")
-CHROME_DRIVER_LOG = os.getenv("CHROME_DRIVER_LOG", os.devnull)  # or "chromedriver.log"
+CHROME_DRIVER_LOG = os.getenv("CHROME_DRIVER_LOG", os.devnull)
 PAGE_LOAD_TIMEOUT = int(os.getenv("PAGE_LOAD_TIMEOUT", "60"))
-CHROME_HEADLESS = os.getenv("CHROME_HEADLESS", "0") == "1"  # for Ozon
+CHROME_HEADLESS = os.getenv("CHROME_HEADLESS", "0") == "1"
 USE_XVFB = os.getenv("USE_XVFB", "1") == "1"
 
 # ---------- WB HTTP (API) ----------
-WB_ITEMS = int(os.getenv("WB_ITEMS", "70"))
-WB_CONCURRENT_LIMIT = int(os.getenv("WB_CONCURRENT_LIMIT", "1"))
-WB_API_TIMEOUT = int(os.getenv("WB_API_TIMEOUT", "30"))
-WB_MIN_INTERVAL = float(os.getenv("WB_MIN_INTERVAL", "2.5"))
-WB_MAX_RETRIES = int(os.getenv("WB_MAX_RETRIES", "6"))
+WB_ITEMS = int(os.getenv("WB_ITEMS", "35"))
+WB_CONCURRENT_LIMIT = int(os.getenv("WB_CONCURRENT_LIMIT", "4"))
+WB_API_TIMEOUT = int(os.getenv("WB_API_TIMEOUT", "20"))
+WB_MIN_INTERVAL = float(os.getenv("WB_MIN_INTERVAL", "0.5"))
+WB_MAX_RETRIES = int(os.getenv("WB_MAX_RETRIES", "5"))
 WB_BACKOFF_BASE = float(os.getenv("WB_BACKOFF_BASE", "1.5"))
 WB_BACKOFF_MAX = float(os.getenv("WB_BACKOFF_MAX", "30"))
-WB_MAX_PAGES = int(os.getenv("WB_MAX_PAGES", "2"))
+WB_MAX_PAGES = int(os.getenv("WB_MAX_PAGES", "1"))
 
 WB_API_VERSION = os.getenv("WB_API_VERSION", "v18")
 WB_API_HOST = os.getenv("WB_API_HOST", "search.wb.ru")
@@ -96,7 +93,6 @@ WB_LANG = os.getenv("WB_LANG", "ru")
 WB_CURR = os.getenv("WB_CURR", "rub")
 WB_SORT = os.getenv("WB_SORT", "popular")
 
-# Optional: shared WB cooldown (prevents hammering during ban-window)
 WB_GLOBAL_COOLDOWN = os.getenv("WB_GLOBAL_COOLDOWN", "1") == "1"
 
 UA = os.getenv(
@@ -110,7 +106,7 @@ DUMP_HTML = os.getenv("DUMP_HTML", "0") == "1"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("marketplace_service")
 
-app = FastAPI(title="Unified Marketplace API", version="5.8.0")
+app = FastAPI(title="Unified Marketplace API", version="10.0.0")
 
 _cache: Dict[str, Tuple[dict, datetime]] = {}
 
@@ -353,11 +349,9 @@ def _wb_urlopen_with_retry(req: UrlRequest) -> bytes:
                 if delay is None:
                     delay = min(WB_BACKOFF_MAX, WB_BACKOFF_BASE ** (attempt + 1) + random.uniform(0.2, 0.9))
                 _wb_set_block(delay)
-                logger.warning("WB 429 retry in %.2fs attempt %s/%s", delay, attempt + 1, WB_MAX_RETRIES)
                 time.sleep(delay)
                 continue
             delay = min(WB_BACKOFF_MAX, WB_BACKOFF_BASE ** (attempt + 1) + random.uniform(0.2, 0.9))
-            logger.warning("WB HTTP %s retry in %.2fs attempt %s/%s", getattr(e, "code", None), delay, attempt + 1, WB_MAX_RETRIES)
             time.sleep(delay)
             continue
         except (URLError, TimeoutError) as e:
@@ -374,22 +368,18 @@ def _wb_urlopen_with_retry(req: UrlRequest) -> bytes:
 
 
 def _wb_img_url_from_nmid(nm_id: int) -> str:
-    # Нужно как в примере: basket-XX.wbcontent.net + /images/big/1.webp
-    # vol = nmId // 100000, part = nmId // 1000
     vol = nm_id // 100000
     part = nm_id // 1000
-    basket = 1 + (vol % 30)  # эвристика 01..30
+    basket = 1 + (vol % 30)
     return f"https://basket-{basket:02d}.wbcontent.net/vol{vol}/part{part}/{nm_id}/images/big/1.webp"
 
 
 def _wb_extract_img_url(p: dict) -> str:
-    # 1) готовые url
     for key in ("img_url", "imgUrl", "image", "imageUrl", "picUrl", "pic_url", "photo", "photoUrl", "image_url"):
         v = p.get(key)
         if isinstance(v, str) and v.startswith("http"):
             return v.strip()
 
-    # 2) pics list
     pics = p.get("pics")
     if isinstance(pics, list) and pics:
         first = pics[0]
@@ -401,7 +391,6 @@ def _wb_extract_img_url(p: dict) -> str:
                 if isinstance(vv, str) and vv.startswith("http"):
                     return vv.strip()
 
-    # 3) fallback по id/nmId
     nm_id = p.get("nmId") or p.get("id")
     try:
         nm_id = int(nm_id)
@@ -457,7 +446,6 @@ def _wb_api_collect_sync(query: str, limit: int) -> List[dict]:
                 pid = p.get("id") or p.get("nmId")
                 name = p.get("name") or ""
 
-                # цена в копейках
                 product_price = None
                 sizes = p.get("sizes")
                 if isinstance(sizes, list) and sizes:
@@ -468,7 +456,6 @@ def _wb_api_collect_sync(query: str, limit: int) -> List[dict]:
                 price_rub = str(int(product_price) // 100) if int(product_price) > 0 else "0"
 
                 link = f"https://www.wildberries.ru/catalog/{pid}/detail.aspx" if pid else ""
-                # без округлений
                 rating = str(p.get("rating")) if p.get("rating") is not None else ""
                 reviews = str(p.get("feedbacks")) if p.get("feedbacks") is not None else ""
                 img_url = _wb_extract_img_url(p)
@@ -518,28 +505,19 @@ def _extract_ozon_img(card) -> str:
 
 
 def _extract_ozon_rating_reviews(card) -> Tuple[str, str]:
-    # Надёжно: в твоём дампе рейтинг = span style "...textPremium" (например 4.9/5.0),
-    # отзывы = span style "...textSecondary" (например 386/1 903/36). [file:2]
     rating = ""
     reviews = ""
 
-    # 1) Самый надёжный путь: текстовые span по style (не зависит от классов p6b305-*)
     rating_el = card.select_one("span[style*='textPremium']")
     if rating_el:
         rating = _clean_spaces(rating_el.get_text(" ", strip=True)).replace(",", ".")
-        # строгая валидация 1..5(.d)
         if not re.fullmatch(r"[1-5](?:\.\d)?", rating):
             rating = ""
 
-    # отзывы часто идут как число (иногда с nbsp) в textSecondary
-    # но textSecondary встречается и в других местах, поэтому берём первое подходящее "число отзывов"
-    secondary = card.select("span[style*='textSecondary']")
-    for el in secondary:
-        t = _clean_spaces(el.get_text(" ", strip=True))
-        d = digits_only(t)
+    for el in card.select("span[style*='textSecondary']"):
+        d = digits_only(_clean_spaces(el.get_text(" ", strip=True)))
         if not d:
             continue
-        # отзывы обычно 1..500000 (под твои примеры 36, 386, 1903) [file:2]
         try:
             v = int(d)
         except Exception:
@@ -548,75 +526,46 @@ def _extract_ozon_rating_reviews(card) -> Tuple[str, str]:
             reviews = str(v)
             break
 
-    # 2) Фолбэк: если Ozon отдал только JSON в data-state (в дампе это тоже есть) [file:2]
-    if not rating or not reviews:
-        # пробуем вытащить из сырого html карточки фрагменты "title":"4.9" / "title":"386"
-        raw = str(card)
-        if not rating:
-            m = re.search(r'"title"\s*:\s*"([1-5](?:\.\d)?)\s*"', raw)
-            if m:
-                rating = m.group(1)
-        if not reviews:
-            m = re.search(r'"title"\s*:\s*"(\d[\d ]{0,10})\s*"', raw)
-            if m:
-                reviews = digits_only(m.group(1))
-
     return rating, reviews
 
 
-def _parse_ozon_html(html: str, seen: Set[str], left: int) -> List[dict]:
-    soup = BeautifulSoup(html, "html.parser")
-    cards = soup.find_all("div", class_=re.compile(r"tile-root"))
-    results: List[dict] = []
+def _parse_ozon_tile_html(tile_html: str) -> Optional[dict]:
+    soup = BeautifulSoup(tile_html, "html.parser")
+    card = soup.find("div", class_=re.compile(r"tile-root"))
+    if not card:
+        return None
 
-    for card in cards:
-        try:
-            # URL
-            lnk = card.find("a", class_=re.compile(r"tile-clickable-element")) or card.find("a", href=re.compile(r"^/product"))
-            href = (lnk.get("href") or "").strip() if lnk else ""
-            if not href:
-                continue
+    lnk = card.find("a", class_=re.compile(r"tile-clickable-element")) or card.find("a", href=re.compile(r"^/product"))
+    href = (lnk.get("href") or "").strip() if lnk else ""
+    if not href:
+        return None
 
-            url = ("https://www.ozon.ru" + href.split("?")[0]) if not href.startswith("http") else href.split("?")[0]
-            if not url or url in seen:
-                continue
+    url = ("https://www.ozon.ru" + href.split("?")[0]) if not href.startswith("http") else href.split("?")[0]
 
-            # PRICE: берём первый tsHeadline500Medium внутри карточки (это “цена сейчас” в твоём примере) [file:2]
-            price_tag = card.find("span", class_=re.compile(r"tsHeadline500Medium"))
-            price = digits_only(price_tag.get_text(" ", strip=True)) if price_tag else ""
-            if not price:
-                continue
+    price_tag = card.find("span", class_=re.compile(r"tsHeadline500Medium"))
+    price = digits_only(price_tag.get_text(" ", strip=True)) if price_tag else ""
+    if not price:
+        return None
 
-            # NAME: берём первый tsBody500Medium (в твоём html это заголовок) [file:2]
-            name = ""
-            name_tag = card.find("span", class_=re.compile(r"tsBody500Medium"))
-            if name_tag:
-                name = _clean_spaces(name_tag.get_text(" ", strip=True))
-            if not name and lnk:
-                name = _clean_spaces(lnk.get_text(" ", strip=True))
+    name = ""
+    name_tag = card.find("span", class_=re.compile(r"tsBody500Medium"))
+    if name_tag:
+        name = _clean_spaces(name_tag.get_text(" ", strip=True))
+    if not name and lnk:
+        name = _clean_spaces(lnk.get_text(" ", strip=True))
 
-            img_url = _extract_ozon_img(card)
-            rating, reviews = _extract_ozon_rating_reviews(card)
+    img_url = _extract_ozon_img(card)
+    rating, reviews = _extract_ozon_rating_reviews(card)
 
-            item = {
-                "marketplace": "ozon",
-                "name": name or "",
-                "url": url,
-                "price": price,
-                "rating": rating,
-                "reviews": reviews,
-                "img_url": img_url,
-            }
-
-            if valid_product_item(item, seen):
-                seen.add(url)
-                results.append(item)
-                if len(results) >= left:
-                    break
-        except Exception:
-            continue
-
-    return results
+    return {
+        "marketplace": "ozon",
+        "name": name or "",
+        "url": url,
+        "price": price,
+        "rating": rating,
+        "reviews": reviews,
+        "img_url": img_url,
+    }
 
 
 def _wait_tiles_increase(driver: webdriver.Chrome, prev_count: int, timeout: int) -> bool:
@@ -657,7 +606,7 @@ def _ozon_sync_collect(driver: webdriver.Chrome, query: str, limit: int) -> List
 
     url = f"https://www.ozon.ru/search/?text={quote_plus(query)}&from_global=true"
     driver.get(url)
-    time.sleep(2.0 + random.uniform(0.2, 0.8))
+    time.sleep(1.1 + random.uniform(0.1, 0.25))
 
     html0 = driver.page_source or ""
     if _looks_like_ozon_block(html0, driver.title or ""):
@@ -669,42 +618,44 @@ def _ozon_sync_collect(driver: webdriver.Chrome, query: str, limit: int) -> List
     )
 
     stagnation = 0
+    processed = 0  # tiles already parsed
 
     for _ in range(OZON_SCROLL_ROUNDS):
-        html = driver.page_source or ""
-        if _looks_like_ozon_block(html, driver.title or ""):
-            _dump_html("ozon-block", html)
+        tiles = driver.find_elements(By.CSS_SELECTOR, OZON_TILE_SELECTOR)
+        if not tiles:
             break
 
-        part = _parse_ozon_html(html, seen, left=limit - len(results))
-        if part:
-            results.extend(part)
-            if len(results) >= limit:
+        new_tiles = tiles[processed:]
+        if new_tiles:
+            for el in new_tiles:
+                try:
+                    tile_html = el.get_attribute("outerHTML") or ""
+                    item = _parse_ozon_tile_html(tile_html)
+                    if not item:
+                        continue
+                    if valid_product_item(item, seen):
+                        seen.add(item["url"])
+                        results.append(item)
+                        if len(results) >= limit:
+                            return results[:limit]
+                except Exception:
+                    continue
+            processed = len(tiles)
+            stagnation = 0
+        else:
+            stagnation += 1
+            if stagnation >= OZON_STAGNATION_LIMIT:
                 break
 
-        prev_tiles = len(driver.find_elements(By.CSS_SELECTOR, OZON_TILE_SELECTOR))
-
+        prev_tiles = len(tiles)
         driver.execute_script("window.scrollBy(0, arguments[0])", OZON_SCROLL_STEP)
 
         grew = _wait_tiles_increase(driver, prev_tiles, timeout=OZON_WAIT_NEW_TILES)
         if not grew:
             if _ozon_try_click_load_more(driver):
-                grew = _wait_tiles_increase(driver, prev_tiles, timeout=OZON_WAIT_NEW_TILES)
+                _wait_tiles_increase(driver, prev_tiles, timeout=OZON_WAIT_NEW_TILES)
 
-        if not grew:
-            stagnation += 1
-            if stagnation >= OZON_STAGNATION_LIMIT:
-                break
-        else:
-            stagnation = 0
-
-        time.sleep(OZON_SCROLL_PAUSE + random.uniform(0.05, 0.25))
-
-    if len(results) < limit:
-        html = driver.page_source or ""
-        part = _parse_ozon_html(html, seen, left=limit - len(results))
-        if part:
-            results.extend(part)
+        time.sleep(OZON_SCROLL_PAUSE + random.uniform(0.03, 0.10))
 
     return results[:limit]
 
@@ -720,13 +671,13 @@ async def collect_ozon(query: str, limit: int) -> List[dict]:
                 if len(items) >= need_min:
                     return items
                 if attempt < OZON_RETRIES - 1:
-                    time.sleep(2.0 + random.uniform(0.5, 1.5))
+                    time.sleep(1.0 + random.uniform(0.2, 0.6))
                     continue
                 return items
             except Exception as e:
                 logger.error("Ozon collect failed: %s", e, exc_info=True)
                 if attempt < OZON_RETRIES - 1:
-                    time.sleep(2.0 + random.uniform(0.5, 1.5))
+                    time.sleep(1.0 + random.uniform(0.2, 0.6))
                     continue
                 return []
             finally:
@@ -803,7 +754,7 @@ async def get_products(request: Request, q: str = Query(..., description="Search
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "5.8.0"}
+    return {"status": "ok", "version": "10.0.0"}
 
 
 @app.get("/cache-stats")
