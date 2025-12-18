@@ -1,0 +1,29 @@
+﻿.product-grid-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 20px;
+    padding: 30px 40px 60px;
+}
+
+.grid-status {
+    grid-column: 1 / -1;
+    text-align: center;
+    font-size: 16px;
+    color: #475467;
+}
+
+.empty-hint {
+    grid-column: 1 / -1;
+    padding: 18px 22px;
+    border-radius: 14px;
+    background: #f8fafc;
+    color: #475467;
+    font-size: 15px;
+}
+
+@media (max-width: 900px) {
+    .product-grid-container {
+        padding: 24px 18px 50px;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    }
+}

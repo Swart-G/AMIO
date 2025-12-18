@@ -1,0 +1,140 @@
+﻿.auth-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 20, 35, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+}
+
+.auth-modal {
+  width: min(420px, 92vw);
+  background: #ffffff;
+  border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(8, 15, 30, 0.18);
+  padding: 22px 24px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: authSlide 0.2s ease-out;
+}
+
+.auth-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.auth-modal-header h2 {
+  margin: 0;
+  font-size: 22px;
+  color: #101828;
+}
+
+.auth-close {
+  border: none;
+  background: #f3f4f6;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: 22px;
+  cursor: pointer;
+  color: #475467;
+}
+
+.auth-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-modal-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #475467;
+}
+
+.auth-modal-form input {
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  color: #111827;
+  background: #fff;
+}
+
+.auth-modal-form input:focus {
+  outline: 2px solid rgba(67, 126, 255, 0.25);
+  border-color: #437eff;
+}
+
+.auth-helper {
+  margin: 0;
+  font-size: 13px;
+  color: #667085;
+}
+
+.auth-error {
+  margin: 0;
+  background: #ffe4e6;
+  color: #b42318;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.auth-message {
+  margin: 0;
+  background: #e0f2fe;
+  color: #035388;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.auth-submit {
+  margin-top: 4px;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, #2b6cb0, #3b82f6);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-submit:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.auth-modal-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+}
+
+.auth-modal-footer button {
+  border: none;
+  background: transparent;
+  color: #2b6cb0;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+@keyframes authSlide {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

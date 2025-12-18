@@ -1,0 +1,29 @@
+﻿* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body, html, #root {
+  width: 100%;
+  min-height: 100vh;
+}
+
+body {
+  background-color: #f4f4f4;
+}
+
+.main-container {
+  min-height: 100vh;
+}
+
+.content-max-width {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+main {
+  width: 100%;
+  padding-top: 96px;
+}

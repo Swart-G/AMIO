@@ -109,6 +109,7 @@ logger = logging.getLogger("marketplace_service")
 app = FastAPI(title="Unified Marketplace API", version="10.0.0")
 
 _cache: Dict[str, Tuple[dict, datetime]] = {}
+_cache_lock = threading.RLock()
 
 _virtual_display: Optional["Display"] = None
 
@@ -145,20 +146,23 @@ class UnifiedProductsResponse(BaseModel):
 def get_from_cache(key: str) -> Optional[dict]:
     if not ENABLE_CACHE:
         return None
-    item = _cache.get(key)
-    if not item:
+    with _cache_lock:
+        item = _cache.get(key)
+        if not item:
+            return None
+        data, ts = item
+        if datetime.now() - ts < timedelta(seconds=CACHE_TTL):
+            return data
+        _cache.pop(key, None)
         return None
-    data, ts = item
-    if datetime.now() - ts < timedelta(seconds=CACHE_TTL):
-        return data
-    _cache.pop(key, None)
-    return None
 
 
 def set_to_cache(key: str, data: dict):
     if not ENABLE_CACHE:
         return
-    _cache[key] = (data, datetime.now())
+    now = datetime.now()
+    with _cache_lock:
+        _cache[key] = (data, now)
 
 
 # ========================= HELPERS =========================

@@ -11,6 +11,7 @@ import models
 import schemas
 import utils
 from config import settings
+from sqlalchemy.orm import selectinload
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -101,7 +102,7 @@ async def verify_email(req: schemas.VerifyRequest, db: AsyncSession = Depends(ge
     refresh_token = utils.create_refresh_token({"sub": user.email})
 
     db_refresh = models.RefreshToken(
-        token=refresh_token, 
+        token=utils.hash_refresh_token(refresh_token),
         user_id=user.id,
         expires_at=datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     )
@@ -134,7 +135,7 @@ async def login(creds: schemas.LoginRequest, db: AsyncSession = Depends(get_db))
     refresh_token = utils.create_refresh_token({"sub": user.email})
 
     db_refresh = models.RefreshToken(
-        token=refresh_token, 
+        token=utils.hash_refresh_token(refresh_token),
         user_id=user.id,
         expires_at=datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     )
@@ -156,8 +157,21 @@ async def read_users_me(current_user: models.User = Depends(get_current_user)):
 
 @auth_router.post("/refresh", response_model=schemas.TokenData)
 async def refresh_token(request: schemas.RefreshRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(models.RefreshToken).where(models.RefreshToken.token == request.refresh_token))
+    hashed_token = utils.hash_refresh_token(request.refresh_token)
+    result = await db.execute(
+        select(models.RefreshToken)
+        .options(selectinload(models.RefreshToken.user))
+        .where(models.RefreshToken.token == hashed_token)
+    )
     stored_token = result.scalars().first()
+
+    if not stored_token:
+        legacy = await db.execute(
+            select(models.RefreshToken)
+            .options(selectinload(models.RefreshToken.user))
+            .where(models.RefreshToken.token == request.refresh_token)
+        )
+        stored_token = legacy.scalars().first()
 
     if not stored_token or stored_token.revoked:
         raise HTTPException(status_code=401, detail="Refresh token revoked or invalid")
@@ -167,7 +181,16 @@ async def refresh_token(request: schemas.RefreshRequest, db: AsyncSession = Depe
 
     payload = utils.decode_token(request.refresh_token)
     if not payload or payload.get("type") != "refresh":
-         raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    token_sub = payload.get("sub")
+    user = stored_token.user
+    if not user:
+        user_result = await db.execute(select(models.User).where(models.User.id == stored_token.user_id))
+        user = user_result.scalars().first()
+
+    if not user or user.email != token_sub:
+        raise HTTPException(status_code=401, detail="Token subject mismatch")
 
     stored_token.revoked = True
     
@@ -175,7 +198,7 @@ async def refresh_token(request: schemas.RefreshRequest, db: AsyncSession = Depe
     new_refresh = utils.create_refresh_token({"sub": payload["sub"]})
     
     new_db_token = models.RefreshToken(
-        token=new_refresh,
+        token=utils.hash_refresh_token(new_refresh),
         user_id=stored_token.user_id,
         expires_at=datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     )
@@ -190,8 +213,12 @@ async def refresh_token(request: schemas.RefreshRequest, db: AsyncSession = Depe
 
 @auth_router.post("/logout")
 async def logout(request: schemas.LogoutRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(models.RefreshToken).where(models.RefreshToken.token == request.refresh_token))
+    hashed_token = utils.hash_refresh_token(request.refresh_token)
+    result = await db.execute(select(models.RefreshToken).where(models.RefreshToken.token == hashed_token))
     stored_token = result.scalars().first()
+    if not stored_token:
+        legacy = await db.execute(select(models.RefreshToken).where(models.RefreshToken.token == request.refresh_token))
+        stored_token = legacy.scalars().first()
     
     if stored_token:
         stored_token.revoked = True
@@ -205,7 +232,7 @@ async def forgot_password(request: schemas.ForgotPasswordRequest, db: AsyncSessi
     user = result.scalars().first()
     
     if user:
-        reset_token = utils.create_access_token({"sub": user.email, "type": "reset"})
+        reset_token = utils.create_access_token({"sub": user.email}, token_type="reset")
         try:
             await utils.send_email(
                 user.email, 
@@ -222,6 +249,9 @@ async def reset_password(request: schemas.ResetPasswordRequest, db: AsyncSession
     payload = utils.decode_token(request.token)
     if not payload:
         raise HTTPException(status_code=400, detail="Invalid token")
+    
+    if payload.get("type") != "reset":
+        raise HTTPException(status_code=400, detail="Invalid token type")
     
     email = payload.get("sub")
     result = await db.execute(select(models.User).where(models.User.email == email))
