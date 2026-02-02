@@ -1,15 +1,35 @@
-﻿import React from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import './ProductCard.css';
 
 const DEFAULT_IMAGE = 'https://placehold.co/240x240/f0f0f0/333333?text=%D0%9D%D0%B5%D1%82+%D1%84%D0%BE%D1%82%D0%BE';
 
 function ProductCard({ product }) {
-  let imageUrl = DEFAULT_IMAGE;
+  const [imageIndex, setImageIndex] = useState(0);
 
-  if (product.img_url) imageUrl = product.img_url;
-  else if (Array.isArray(product.images) && product.images.length > 0) {
-    imageUrl = product.images[0];
-  }
+  const imageCandidates = useMemo(() => {
+    const candidates = [];
+    const seen = new Set();
+
+    const add = (value) => {
+      if (typeof value !== 'string') return;
+      const url = value.trim();
+      if (!url || seen.has(url)) return;
+      seen.add(url);
+      candidates.push(url);
+    };
+
+    add(product?.img_url);
+    if (Array.isArray(product?.image_urls)) product.image_urls.forEach(add);
+    if (Array.isArray(product?.images)) product.images.forEach(add);
+
+    return candidates;
+  }, [product?.img_url, product?.image_urls, product?.images]);
+
+  useEffect(() => {
+    setImageIndex(0);
+  }, [product?.url, product?.img_url, product?.image_urls, product?.images]);
+
+  const imageUrl = imageCandidates[imageIndex] || DEFAULT_IMAGE;
 
   const priceValue = Number(product.price) || 0;
   const formattedPrice = new Intl.NumberFormat('ru-RU', {
@@ -34,6 +54,16 @@ function ProductCard({ product }) {
     }
   };
 
+  const handleImageError = () => {
+    if (imageUrl === DEFAULT_IMAGE) return;
+    const nextIndex = imageIndex + 1;
+    if (nextIndex < imageCandidates.length) {
+      setImageIndex(nextIndex);
+      return;
+    }
+    setImageIndex(imageCandidates.length);
+  };
+
   return (
     <div className="product-card" onClick={handleOpen}>
       <div className="product-card-image-wrapper">
@@ -41,9 +71,7 @@ function ProductCard({ product }) {
           className="product-card-image"
           src={imageUrl}
           alt={product.name || product.title || 'Товар'}
-          onError={(event) => {
-            event.target.src = DEFAULT_IMAGE;
-          }}
+          onError={handleImageError}
           loading="lazy"
         />
       </div>
