@@ -1,5 +1,4 @@
 services:
-  # --- База данных ---
   postgres_db:
     image: postgres:15
     container_name: postgres_db
@@ -17,7 +16,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # --- Сервис Аутентификации  ---
   auth_service:
     build: ./backend/auth_service
     container_name: auth_service
@@ -30,16 +28,13 @@ services:
     networks:
       - api_network
 
-  # --- Сервис Маркетплейса  ---
   marketplace_service:
     build: ./backend/marketplace_service
     container_name: marketplace_service
     env_file:
       - .env
-    networks:
-      - api_network
+    network_mode: host
 
-  # --- Nginx (Gateway) ---
   nginx:
     build:
       context: .
@@ -55,7 +50,6 @@ services:
     networks:
       - api_network
 
-# --- ГЛОБАЛЬНАЯ СЕКЦИЯ СЕТЕЙ  ---
 networks:
   api_network:
     driver: bridge

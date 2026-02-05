@@ -35,7 +35,6 @@ main {
   padding-bottom: 20px;
 }
 
-/* Настройки для мобильных устройств */
 @media (max-width: 768px) {
   .content-max-width {
     padding-inline: 15px;

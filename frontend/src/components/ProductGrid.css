@@ -30,6 +30,20 @@
   border-radius: 12px;
 }
 
+.grid-load-more {
+  grid-column: 1 / -1;
+  height: 1px;
+}
+
+.grid-loading-more {
+  grid-column: 1 / -1;
+  text-align: center;
+  margin: 0;
+  padding: 4px 0 10px;
+  color: #5f6881;
+  font-size: 13px;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

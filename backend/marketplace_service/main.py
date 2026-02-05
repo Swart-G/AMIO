@@ -54,8 +54,6 @@ except Exception:
     HAS_REQUESTS = False
 
 
-# ================= CONFIG =================
-
 MAX_ITEMS = int(os.getenv("MAX_ITEMS", "120"))
 DEFAULT_PAGE_ITEMS = int(os.getenv("PAGE_ITEMS", "24"))
 
@@ -71,7 +69,6 @@ WB_TASK_TIMEOUT = float(os.getenv("WB_TASK_TIMEOUT", "4.5"))
 OZON_TASK_TIMEOUT = float(os.getenv("OZON_TASK_TIMEOUT", "4.5"))
 YM_TASK_TIMEOUT = float(os.getenv("YM_TASK_TIMEOUT", "4.5"))
 
-# ---------- Ozon Selenium ----------
 OZON_ITEMS = int(os.getenv("OZON_ITEMS", "15"))
 OZON_BROWSER_LIMIT = int(os.getenv("OZON_BROWSER_LIMIT", "1"))
 OZON_RETRIES = int(os.getenv("OZON_RETRIES", "2"))
@@ -99,7 +96,6 @@ USE_XVFB = os.getenv("USE_XVFB", "1") == "1"
 CHROME_BLOCK_IMAGES = os.getenv("CHROME_BLOCK_IMAGES", "0") == "1"
 CHROME_BLOCK_STYLES = os.getenv("CHROME_BLOCK_STYLES", "1") == "1"
 
-# ---------- Yandex Market HTTP (HTML) ----------
 YM_ITEMS = int(os.getenv("YM_ITEMS", "20"))
 YM_CONCURRENT_LIMIT = int(os.getenv("YM_CONCURRENT_LIMIT", "4"))
 YM_API_TIMEOUT = float(os.getenv("YM_API_TIMEOUT", "4.0"))
@@ -111,7 +107,6 @@ YM_LR = os.getenv("YM_LR", "").strip()
 YM_GPS = os.getenv("YM_GPS", "").strip()
 YM_BASE_URL = os.getenv("YM_BASE_URL", "https://market.yandex.ru/search").strip()
 
-# ---------- WB HTTP (API) ----------
 WB_ITEMS = int(os.getenv("WB_ITEMS", "35"))
 WB_CONCURRENT_LIMIT = int(os.getenv("WB_CONCURRENT_LIMIT", "4"))
 WB_API_TIMEOUT = float(os.getenv("WB_API_TIMEOUT", "3.2"))
@@ -210,8 +205,6 @@ _ozon_driver_lock = threading.RLock()
 _ozon_driver: Optional[webdriver.Chrome] = None
 
 
-# ========================= MODELS =========================
-
 class ProductItem(BaseModel):
     name: Optional[str]
     url: Optional[str]
@@ -232,8 +225,6 @@ class UnifiedProductsResponse(BaseModel):
     total: Optional[int] = None
     has_more: Optional[bool] = None
 
-
-# ========================= CACHE =========================
 
 def get_from_cache(key: str) -> Optional[dict]:
     if not ENABLE_CACHE:
@@ -325,8 +316,6 @@ def _ym_cache_set(query: str, items: List[dict]):
     with _ym_cache_lock:
         _ym_cache[query] = (items, datetime.now())
 
-
-# ========================= HELPERS =========================
 
 def digits_only(s: str) -> str:
     return re.sub(r"[^\d]", "", s or "")
@@ -564,8 +553,6 @@ def _ym_extract_image_candidates(card) -> List[str]:
     return candidates
 
 
-# ========================= CHROME =========================
-
 def _new_chrome_driver(profile_prefix: str) -> webdriver.Chrome:
     options = Options()
 
@@ -663,8 +650,6 @@ def _quit_chrome_driver(driver: webdriver.Chrome):
     if profile_dir and os.path.isdir(profile_dir):
         shutil.rmtree(profile_dir, ignore_errors=True)
 
-
-# ========================= WB (HTTP API) =========================
 
 def _wb_set_block(seconds: float):
     global _wb_blocked_until
@@ -799,8 +784,9 @@ def _wb_urlopen_with_retry(req: UrlRequest, deadline_ts: float) -> bytes:
                         last_exc = e2
                 delay = _wb_retry_after_seconds(e.headers.get("Retry-After"))
                 if delay is None:
-                    delay = WB_BACKOFF_BASE ** (attempt + 1) + random.uniform(0.5, 1.5)
-                delay = min(float(WB_BACKOFF_MAX), max(float(delay), float(WB_429_COOLDOWN)))
+                    delay = WB_BACKOFF_BASE ** (attempt + 1) + random.uniform(0.35, 0.9)
+                cooldown_floor = min(float(WB_429_COOLDOWN), 1.2)
+                delay = min(float(WB_BACKOFF_MAX), max(float(delay), cooldown_floor))
                 _wb_set_block(delay)
                 time.sleep(min(delay, max(0.0, deadline_ts - time.time())))
                 continue
@@ -1143,12 +1129,8 @@ def _wb_api_collect_sync(query: str, limit: int) -> List[dict]:
                 "User-Agent": ua,
                 "Accept": "application/json, text/plain, */*",
                 "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-                "Referer": "https://www.wildberries.ru",
+                "Referer": "https://www.wildberries.ru/",
                 "Origin": "https://www.wildberries.ru",
-                "X-Requested-With": "XMLHttpRequest",
-                "sec-ch-ua": "\"Chromium\";v=\"122\", \"Not:A-Brand\";v=\"99\"",
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": "\"Windows\"",
                 "Connection": "close",
             },
         )
@@ -1245,7 +1227,6 @@ async def collect_wb(query: str, limit: int) -> List[dict]:
         cached = _wb_cache_get(cache_key, allow_stale=True)
         if cached is not None:
             return cached[:limit]
-        return []
 
     inflight_key = f"{cache_key}:{int(limit)}"
 
@@ -1293,8 +1274,6 @@ async def collect_wb(query: str, limit: int) -> List[dict]:
                 if _wb_inflight_tasks.get(inflight_key) is task:
                     _wb_inflight_tasks.pop(inflight_key, None)
 
-
-# ========================= YANDEX MARKET (HTML) =========================
 
 def _ym_build_search_url(query: str, page: int) -> str:
     params = {"text": query}
@@ -1451,8 +1430,6 @@ async def collect_ym(query: str, limit: int) -> List[dict]:
             logger.error("Yandex Market collect failed: %s", e, exc_info=True)
             return []
 
-
-# ========================= OZON (Selenium + BS4) =========================
 
 def _ozon_get_reusable_driver() -> webdriver.Chrome:
     global _ozon_driver
@@ -1860,7 +1837,7 @@ def _ozon_sync_collect(driver: webdriver.Chrome, query: str, limit: int, deadlin
             return results[:limit]
 
     stagnation = 0
-    processed = 0  # tiles already parsed
+    processed = 0
 
     for _ in range(OZON_SCROLL_ROUNDS):
         if time.time() >= deadline_ts:
@@ -1952,8 +1929,6 @@ async def collect_ozon(query: str, limit: int) -> List[dict]:
             return []
 
 
-# ========================= APP LIFECYCLE =========================
-
 @app.on_event("startup")
 async def startup_event():
     global _virtual_display
@@ -1987,8 +1962,6 @@ async def shutdown_event():
         _virtual_display = None
         logger.info("Xvfb stopped")
 
-
-# ========================= API =========================
 
 @app.get("/api/products", response_model=UnifiedProductsResponse)
 async def get_products(

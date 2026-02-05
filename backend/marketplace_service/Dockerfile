@@ -22,8 +22,19 @@ RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd6
     && rm google-chrome-stable_current_amd64.deb \
     && rm -rf /var/lib/apt/lists/*
 
-RUN DRIVER_URL=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json" | \
-    jq -r '.channels.Stable.downloads.chromedriver[] | select(.platform=="linux64") | .url') \
+RUN CHROME_VERSION=$(google-chrome --product-version) \
+    && CHROME_BUILD=$(echo "$CHROME_VERSION" | cut -d. -f1-3) \
+    && CHROME_MAJOR=$(echo "$CHROME_VERSION" | cut -d. -f1) \
+    && DRIVER_URL=$(curl -fsSL "https://googlechromelabs.github.io/chrome-for-testing/latest-patch-versions-per-build-with-downloads.json" | \
+      jq -r --arg b "$CHROME_BUILD" '.builds[$b].downloads.chromedriver[]? | select(.platform=="linux64") | .url' | head -n1) \
+    && if [ -z "$DRIVER_URL" ] || [ "$DRIVER_URL" = "null" ]; then \
+      DRIVER_URL=$(curl -fsSL "https://googlechromelabs.github.io/chrome-for-testing/latest-versions-per-milestone-with-downloads.json" | \
+      jq -r --arg m "$CHROME_MAJOR" '.milestones[$m].downloads.chromedriver[]? | select(.platform=="linux64") | .url' | head -n1); \
+    fi \
+    && if [ -z "$DRIVER_URL" ] || [ "$DRIVER_URL" = "null" ]; then \
+      echo "Failed to resolve chromedriver for chrome $CHROME_VERSION"; exit 1; \
+    fi \
+    && echo "Chrome version: $CHROME_VERSION" \
     && echo "Downloading driver from: $DRIVER_URL" \
     && wget -q -O chromedriver-linux64.zip "$DRIVER_URL" \
     && unzip -o chromedriver-linux64.zip \
