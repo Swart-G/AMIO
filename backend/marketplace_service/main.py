@@ -47,19 +47,29 @@ except Exception:
     HAS_XVFB = False
 
 
+try:
+    import requests
+    HAS_REQUESTS = True
+except Exception:
+    HAS_REQUESTS = False
+
+
 # ================= CONFIG =================
 
-MAX_ITEMS = int(os.getenv("MAX_ITEMS", "50"))
+MAX_ITEMS = int(os.getenv("MAX_ITEMS", "120"))
+DEFAULT_PAGE_ITEMS = int(os.getenv("PAGE_ITEMS", "24"))
 
 ENABLE_CACHE = os.getenv("ENABLE_CACHE", "1") == "1"
 CACHE_TTL = int(os.getenv("CACHE_TTL", "120"))
 
 ENABLE_WB = os.getenv("ENABLE_WB", "1") == "1"
 ENABLE_OZON = os.getenv("ENABLE_OZON", "1") == "1"
+ENABLE_YM = os.getenv("ENABLE_YM", "1") == "1"
 
 SEARCH_TOTAL_TIMEOUT = float(os.getenv("SEARCH_TOTAL_TIMEOUT", "5"))
 WB_TASK_TIMEOUT = float(os.getenv("WB_TASK_TIMEOUT", "4.5"))
 OZON_TASK_TIMEOUT = float(os.getenv("OZON_TASK_TIMEOUT", "4.5"))
+YM_TASK_TIMEOUT = float(os.getenv("YM_TASK_TIMEOUT", "4.5"))
 
 # ---------- Ozon Selenium ----------
 OZON_ITEMS = int(os.getenv("OZON_ITEMS", "15"))
@@ -89,6 +99,18 @@ USE_XVFB = os.getenv("USE_XVFB", "1") == "1"
 CHROME_BLOCK_IMAGES = os.getenv("CHROME_BLOCK_IMAGES", "0") == "1"
 CHROME_BLOCK_STYLES = os.getenv("CHROME_BLOCK_STYLES", "1") == "1"
 
+# ---------- Yandex Market HTTP (HTML) ----------
+YM_ITEMS = int(os.getenv("YM_ITEMS", "20"))
+YM_CONCURRENT_LIMIT = int(os.getenv("YM_CONCURRENT_LIMIT", "4"))
+YM_API_TIMEOUT = float(os.getenv("YM_API_TIMEOUT", "4.0"))
+YM_TOTAL_BUDGET = float(os.getenv("YM_TOTAL_BUDGET", "3.5"))
+YM_MAX_RETRIES = int(os.getenv("YM_MAX_RETRIES", "2"))
+YM_MAX_PAGES = int(os.getenv("YM_MAX_PAGES", "1"))
+YM_CACHE_TTL = int(os.getenv("YM_CACHE_TTL", "300"))
+YM_LR = os.getenv("YM_LR", "").strip()
+YM_GPS = os.getenv("YM_GPS", "").strip()
+YM_BASE_URL = os.getenv("YM_BASE_URL", "https://market.yandex.ru/search").strip()
+
 # ---------- WB HTTP (API) ----------
 WB_ITEMS = int(os.getenv("WB_ITEMS", "35"))
 WB_CONCURRENT_LIMIT = int(os.getenv("WB_CONCURRENT_LIMIT", "4"))
@@ -109,6 +131,16 @@ WB_LANG = os.getenv("WB_LANG", "ru")
 WB_CURR = os.getenv("WB_CURR", "rub")
 WB_SORT = os.getenv("WB_SORT", "popular")
 WB_IMAGE_EXT = os.getenv("WB_IMAGE_EXT", "webp").lstrip(".")
+WB_USER_AGENTS = [
+    u.strip()
+    for u in os.getenv("WB_USER_AGENTS", "").split("||")
+    if u.strip()
+]
+WB_PROXY_URLS = [
+    p.strip()
+    for p in os.getenv("WB_PROXY_URLS", "").split(",")
+    if p.strip()
+]
 WB_IMAGE_HOSTS = [
     h.strip()
     for h in os.getenv("WB_IMAGE_HOSTS", "wbbasket.ru,wb.ru,wbcontent.net").split(",")
@@ -151,6 +183,7 @@ _virtual_display: Optional["Display"] = None
 
 _ozon_sem = asyncio.Semaphore(OZON_BROWSER_LIMIT)
 _wb_semaphore = asyncio.Semaphore(WB_CONCURRENT_LIMIT)
+_ym_semaphore = asyncio.Semaphore(YM_CONCURRENT_LIMIT)
 
 _wb_rate_lock = threading.Lock()
 _wb_last_request_ts = 0.0
@@ -163,6 +196,9 @@ _wb_cache_lock = threading.RLock()
 
 _ozon_cache: Dict[str, Tuple[List[dict], datetime]] = {}
 _ozon_cache_lock = threading.RLock()
+
+_ym_cache: Dict[str, Tuple[List[dict], datetime]] = {}
+_ym_cache_lock = threading.RLock()
 
 _wb_img_cache: Dict[str, Tuple[str, datetime]] = {}
 _wb_img_cache_lock = threading.RLock()
@@ -191,6 +227,10 @@ class UnifiedProductsResponse(BaseModel):
     query: str
     count: int
     items: List[ProductItem]
+    offset: int = 0
+    limit: int = 0
+    total: Optional[int] = None
+    has_more: Optional[bool] = None
 
 
 # ========================= CACHE =========================
@@ -264,6 +304,27 @@ def _ozon_cache_set(query: str, items: List[dict]):
     with _ozon_cache_lock:
         _ozon_cache[query] = (items, datetime.now())
 
+def _ym_cache_get(query: str) -> Optional[List[dict]]:
+    if YM_CACHE_TTL <= 0:
+        return None
+    now = datetime.now()
+    with _ym_cache_lock:
+        item = _ym_cache.get(query)
+        if not item:
+            return None
+        data, ts = item
+        if (now - ts).total_seconds() <= YM_CACHE_TTL:
+            return data
+        _ym_cache.pop(query, None)
+        return None
+
+
+def _ym_cache_set(query: str, items: List[dict]):
+    if YM_CACHE_TTL <= 0:
+        return
+    with _ym_cache_lock:
+        _ym_cache[query] = (items, datetime.now())
+
 
 # ========================= HELPERS =========================
 
@@ -320,6 +381,69 @@ def _clean_spaces(s: str) -> str:
     return (s or "").replace("\u00a0", " ").strip()
 
 
+def _calc_market_limit(target: int, market_max: int, enabled_count: int) -> int:
+    if target <= 0:
+        return 0
+    base = max(1, int((target + max(1, enabled_count) - 1) / max(1, enabled_count)))
+    buffer = 2
+    return min(int(market_max), base + buffer)
+
+
+def _merge_items(existing: List[dict], new_items: List[dict], max_items: int) -> List[dict]:
+    if not existing:
+        return new_items[:max_items]
+    out = list(existing)
+    seen = {it.get("url") for it in existing if isinstance(it, dict)}
+    for item in new_items:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(item)
+        if len(out) >= max_items:
+            break
+    return out[:max_items]
+
+
+def _looks_like_ym_block(html: str, title: str = "") -> bool:
+    t = (html or "").lower()
+    tt = (title or "").lower()
+    return (
+        "smartcaptcha" in t
+        or "showcaptcha" in t
+        or "yandex smartcaptcha" in t
+        or "captcha" in t
+        or "access denied" in t
+        or "captcha" in tt
+        or "smartcaptcha" in tt
+    )
+
+
+def _normalize_ym_url(url: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if u.startswith("//"):
+        u = "https:" + u
+    elif u.startswith("/"):
+        u = "https://market.yandex.ru" + u
+    u = u.split("#", 1)[0].split("?", 1)[0]
+    return u
+
+
+def _normalize_ym_image_url(url: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith("/"):
+        return "https://market.yandex.ru" + u
+    return u
+
+
 def _first_src_from_srcset(srcset: str) -> str:
     if not srcset:
         return ""
@@ -351,6 +475,93 @@ def _first_src_from_srcset(srcset: str) -> str:
             best_url = url
 
     return best_url or fallback_last
+
+
+def _parse_compact_number(text: str) -> Optional[int]:
+    if not text:
+        return None
+    raw = (text or "").replace("\u00a0", " ").replace("\u202f", " ").strip()
+    if not raw:
+        return None
+    compact = re.sub(r"\s+", "", raw)
+    m = re.search(r"(\d+(?:[.,]\d+)?)(k|тыс\.?|млн|m)?", compact, re.IGNORECASE)
+    if not m:
+        return None
+    num_raw = (m.group(1) or "").replace(",", ".")
+    suffix = (m.group(2) or "").lower()
+    try:
+        value = float(num_raw)
+    except Exception:
+        return None
+    if suffix in ("k", "тыс", "тыс."):
+        value *= 1000.0
+    elif suffix in ("m", "млн"):
+        value *= 1000000.0
+    return int(round(value))
+
+
+def _ym_extract_rating_reviews(card) -> Tuple[str, str]:
+    rating = ""
+    reviews = ""
+
+    rating_el = card.select_one('[data-auto="reviews"]')
+    if not rating_el:
+        return rating, reviews
+
+    rating_val = rating_el.select_one(".ds-rating__value") or rating_el
+    rating_text = _clean_spaces(rating_val.get_text(" ", strip=True)).replace(",", ".")
+    if rating_text:
+        m = re.search(r"[1-5](?:\.\d)?", rating_text)
+        if m:
+            rating = m.group(0)
+
+    full_text = _clean_spaces(rating_el.get_text(" ", strip=True))
+    if full_text:
+        m = re.search(r"\(([^)]+)\)", full_text)
+        if m:
+            v = _parse_compact_number(m.group(1))
+            if v is not None:
+                reviews = str(v)
+        if not reviews:
+            nums = re.findall(r"\d+(?:[.,]\d+)?\s*(?:k|тыс\.?|млн|m)?", full_text, re.IGNORECASE)
+            if len(nums) >= 2:
+                v = _parse_compact_number(nums[1])
+                if v is not None:
+                    reviews = str(v)
+            if not reviews:
+                v = _parse_compact_number(full_text)
+                if v is not None:
+                    reviews = str(v)
+
+    return rating, reviews
+
+
+def _ym_extract_image_candidates(card) -> List[str]:
+    candidates: List[str] = []
+    seen: Set[str] = set()
+
+    def add(v: Optional[str]):
+        if not isinstance(v, str):
+            return
+        u = _normalize_ym_image_url(v)
+        if not u or u in seen or u.startswith("data:"):
+            return
+        seen.add(u)
+        candidates.append(u)
+
+    img = card.select_one("img")
+    if img:
+        add(img.get("src"))
+        add(img.get("data-src"))
+        add(img.get("data-original"))
+        add(_first_src_from_srcset(img.get("srcset") or ""))
+        add(_first_src_from_srcset(img.get("data-srcset") or ""))
+
+    for s in card.select("picture source[srcset], source[srcset], picture source[data-srcset], source[data-srcset]"):
+        add(_first_src_from_srcset(s.get("srcset") or ""))
+        add(_first_src_from_srcset(s.get("data-srcset") or ""))
+
+    return candidates
 
 
 # ========================= CHROME =========================
@@ -518,6 +729,46 @@ def _wb_retry_after_seconds(value: Optional[str]) -> Optional[float]:
         return None
 
 
+def _wb_pick_user_agent() -> str:
+    if WB_USER_AGENTS:
+        return random.choice(WB_USER_AGENTS)
+    return UA
+
+
+def _wb_pick_proxy() -> Optional[str]:
+    if WB_PROXY_URLS:
+        return random.choice(WB_PROXY_URLS)
+    return None
+
+
+def _wb_apply_user_agent(req: UrlRequest, ua: str):
+    if not ua:
+        return
+    try:
+        req.headers["User-agent"] = ua
+        req.headers["User-Agent"] = ua
+    except Exception:
+        pass
+    try:
+        req.unredirected_hdrs["User-agent"] = ua
+        req.unredirected_hdrs["User-Agent"] = ua
+    except Exception:
+        pass
+
+
+def _wb_requests_fetch(req: UrlRequest, timeout: float, proxy_url: Optional[str] = None) -> bytes:
+    if not HAS_REQUESTS:
+        raise URLError("requests not available")
+    headers = dict(req.header_items() or [])
+    proxies = None
+    if proxy_url:
+        proxies = {"http": proxy_url, "https": proxy_url}
+    resp = requests.get(req.full_url, headers=headers, timeout=timeout, proxies=proxies)
+    if int(resp.status_code) in (200, 206, 304):
+        return resp.content
+    raise HTTPError(req.full_url, resp.status_code, resp.reason, resp.headers, None)
+
+
 def _wb_urlopen_with_retry(req: UrlRequest, deadline_ts: float) -> bytes:
     last_exc = None
     for attempt in range(WB_MAX_RETRIES):
@@ -528,6 +779,7 @@ def _wb_urlopen_with_retry(req: UrlRequest, deadline_ts: float) -> bytes:
             if time.time() >= deadline_ts:
                 break
         _wb_rate_sleep_if_needed(deadline_ts)
+        _wb_apply_user_agent(req, _wb_pick_user_agent())
         try:
             remaining = max(0.1, float(deadline_ts - time.time()))
             timeout = min(float(WB_API_TIMEOUT), remaining)
@@ -536,6 +788,15 @@ def _wb_urlopen_with_retry(req: UrlRequest, deadline_ts: float) -> bytes:
         except HTTPError as e:
             last_exc = e
             if getattr(e, "code", None) == 429:
+                if WB_PROXY_URLS and HAS_REQUESTS and time.time() < deadline_ts:
+                    try:
+                        remaining = max(0.1, float(deadline_ts - time.time()))
+                        timeout = min(float(WB_API_TIMEOUT), remaining)
+                        proxy_url = _wb_pick_proxy()
+                        if proxy_url:
+                            return _wb_requests_fetch(req, timeout=timeout, proxy_url=proxy_url)
+                    except Exception as e2:
+                        last_exc = e2
                 delay = _wb_retry_after_seconds(e.headers.get("Retry-After"))
                 if delay is None:
                     delay = WB_BACKOFF_BASE ** (attempt + 1) + random.uniform(0.5, 1.5)
@@ -548,6 +809,20 @@ def _wb_urlopen_with_retry(req: UrlRequest, deadline_ts: float) -> bytes:
             continue
         except (URLError, TimeoutError) as e:
             last_exc = e
+            if HAS_REQUESTS and time.time() < deadline_ts:
+                try:
+                    remaining = max(0.1, float(deadline_ts - time.time()))
+                    timeout = min(float(WB_API_TIMEOUT), remaining)
+                    return _wb_requests_fetch(req, timeout=timeout)
+                except Exception as e2:
+                    last_exc = e2
+                if WB_PROXY_URLS and time.time() < deadline_ts:
+                    try:
+                        proxy_url = _wb_pick_proxy()
+                        if proxy_url:
+                            return _wb_requests_fetch(req, timeout=timeout, proxy_url=proxy_url)
+                    except Exception as e3:
+                        last_exc = e3
             delay = min(WB_BACKOFF_MAX, WB_BACKOFF_BASE ** (attempt + 1) + random.uniform(0.2, 0.9))
             time.sleep(min(delay, max(0.0, deadline_ts - time.time())))
             continue
@@ -556,6 +831,20 @@ def _wb_urlopen_with_retry(req: UrlRequest, deadline_ts: float) -> bytes:
             delay = min(WB_BACKOFF_MAX, WB_BACKOFF_BASE ** (attempt + 1) + random.uniform(0.2, 0.9))
             time.sleep(min(delay, max(0.0, deadline_ts - time.time())))
             continue
+    if HAS_REQUESTS and time.time() < deadline_ts:
+        try:
+            remaining = max(0.1, float(deadline_ts - time.time()))
+            timeout = min(float(WB_API_TIMEOUT), remaining)
+            return _wb_requests_fetch(req, timeout=timeout)
+        except Exception as e:
+            last_exc = e
+        if WB_PROXY_URLS and time.time() < deadline_ts:
+            try:
+                proxy_url = _wb_pick_proxy()
+                if proxy_url:
+                    return _wb_requests_fetch(req, timeout=timeout, proxy_url=proxy_url)
+            except Exception as e2:
+                last_exc = e2
     raise last_exc
 
 
@@ -793,6 +1082,7 @@ def _wb_probe_image_url(nm_id: int, size: str, basket_hint: Optional[int] = None
     max_baskets = max(1, int(WB_IMAGE_PROBE_MAX_BASKETS))
     baskets = baskets[:max_baskets]
 
+    ua = _wb_pick_user_agent()
     for basket in baskets:
         for host in hosts[:2]:
             for ext in exts:
@@ -805,7 +1095,7 @@ def _wb_probe_image_url(nm_id: int, size: str, basket_hint: Optional[int] = None
                         url,
                         method="HEAD",
                         headers={
-                            "User-Agent": UA,
+                            "User-Agent": ua,
                             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
                             "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
                             "Connection": "close",
@@ -833,6 +1123,7 @@ def _wb_api_collect_sync(query: str, limit: int) -> List[dict]:
     while len(out) < limit and page <= WB_MAX_PAGES:
         if time.time() >= deadline_ts:
             break
+        ua = _wb_pick_user_agent()
         params = {
             "appType": WB_APP_TYPE,
             "curr": WB_CURR,
@@ -849,11 +1140,15 @@ def _wb_api_collect_sync(query: str, limit: int) -> List[dict]:
         req = UrlRequest(
             url,
             headers={
-                "User-Agent": UA,
+                "User-Agent": ua,
                 "Accept": "application/json, text/plain, */*",
                 "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
                 "Referer": "https://www.wildberries.ru",
                 "Origin": "https://www.wildberries.ru",
+                "X-Requested-With": "XMLHttpRequest",
+                "sec-ch-ua": "\"Chromium\";v=\"122\", \"Not:A-Brand\";v=\"99\"",
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": "\"Windows\"",
                 "Connection": "close",
             },
         )
@@ -943,7 +1238,7 @@ async def collect_wb(query: str, limit: int) -> List[dict]:
     query_str = (query or "").strip()
     cache_key = query_str.casefold()
     cached = _wb_cache_get(cache_key)
-    if cached is not None:
+    if cached is not None and len(cached) >= limit:
         return cached[:limit]
 
     if WB_GLOBAL_COOLDOWN and _wb_block_remaining() > 0:
@@ -997,6 +1292,164 @@ async def collect_wb(query: str, limit: int) -> List[dict]:
             async with _wb_inflight_lock:
                 if _wb_inflight_tasks.get(inflight_key) is task:
                     _wb_inflight_tasks.pop(inflight_key, None)
+
+
+# ========================= YANDEX MARKET (HTML) =========================
+
+def _ym_build_search_url(query: str, page: int) -> str:
+    params = {"text": query}
+    if page and int(page) > 1:
+        params["page"] = str(int(page))
+    if YM_LR:
+        params["lr"] = YM_LR
+    if YM_GPS:
+        params["gps"] = YM_GPS
+    return YM_BASE_URL + "?" + urlencode(params, quote_via=quote_plus)
+
+
+def _ym_urlopen_with_retry(req: UrlRequest, deadline_ts: float) -> bytes:
+    last_exc = None
+    for attempt in range(max(1, int(YM_MAX_RETRIES))):
+        if time.time() >= deadline_ts:
+            break
+        try:
+            remaining = max(0.1, float(deadline_ts - time.time()))
+            timeout = min(float(YM_API_TIMEOUT), remaining)
+            with urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except HTTPError as e:
+            last_exc = e
+            delay = min(2.5, 0.6 + (attempt + 1) * 0.5 + random.uniform(0.1, 0.4))
+            time.sleep(min(delay, max(0.0, deadline_ts - time.time())))
+            continue
+        except (URLError, TimeoutError) as e:
+            last_exc = e
+            delay = min(2.0, 0.4 + (attempt + 1) * 0.4 + random.uniform(0.1, 0.4))
+            time.sleep(min(delay, max(0.0, deadline_ts - time.time())))
+            continue
+        except Exception as e:
+            last_exc = e
+            delay = min(2.0, 0.4 + (attempt + 1) * 0.4 + random.uniform(0.1, 0.4))
+            time.sleep(min(delay, max(0.0, deadline_ts - time.time())))
+            continue
+    raise last_exc
+
+
+def _ym_parse_card(card) -> Optional[dict]:
+    link_el = card.select_one('a[data-auto="snippet-link"]') or card.select_one("a[href*='/card/']")
+    if not link_el:
+        return None
+    href = (link_el.get("href") or "").strip()
+    if not href:
+        return None
+    url = _normalize_ym_url(href)
+    if not url:
+        return None
+
+    name_el = card.select_one('[data-auto="snippet-title"]') or link_el
+    name = _clean_spaces(name_el.get_text(" ", strip=True)) if name_el else ""
+
+    price_el = card.select_one('[data-auto="snippet-price-current"]')
+    price = digits_only(price_el.get_text(" ", strip=True)) if price_el else ""
+    if not price:
+        return None
+
+    rating, reviews = _ym_extract_rating_reviews(card)
+    image_urls = _ym_extract_image_candidates(card)
+    img_url = image_urls[0] if image_urls else ""
+
+    return {
+        "marketplace": "yandex_market",
+        "name": name or "",
+        "url": url,
+        "price": price,
+        "rating": rating,
+        "reviews": reviews,
+        "img_url": img_url,
+        "image_urls": image_urls or None,
+    }
+
+
+def _ym_extract_items_from_html(html: str, limit: int) -> List[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    cards = soup.select('article[data-auto="searchOrganic"]')
+    if not cards:
+        cards = soup.select('article[data-auto="searchPromo"], article[data-auto="searchSponsored"]')
+    if not cards:
+        cards = soup.select('[data-zone-name="productSnippet"]')
+
+    seen: Set[str] = set()
+    results: List[dict] = []
+    for card in cards:
+        try:
+            item = _ym_parse_card(card)
+            if not item:
+                continue
+            if valid_product_item(item, seen):
+                seen.add(item["url"])
+                results.append(item)
+                if len(results) >= limit:
+                    break
+        except Exception:
+            continue
+    return results[:limit]
+
+
+def _ym_collect_sync(query: str, limit: int) -> List[dict]:
+    deadline_ts = time.time() + max(0.5, float(YM_TOTAL_BUDGET))
+    out: List[dict] = []
+    seen: Set[str] = set()
+    page = 1
+
+    while len(out) < limit and page <= YM_MAX_PAGES:
+        if time.time() >= deadline_ts:
+            break
+        url = _ym_build_search_url(query, page)
+        req = UrlRequest(
+            url,
+            headers={
+                "User-Agent": UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+                "Connection": "close",
+            },
+        )
+        raw = _ym_urlopen_with_retry(req, deadline_ts=deadline_ts)
+        html = raw.decode("utf-8", errors="ignore")
+        items = _ym_extract_items_from_html(html, limit)
+        if not items and _looks_like_ym_block(html):
+            _dump_html("ym-block", html)
+            break
+        if not items:
+            break
+        for item in items:
+            if item["url"] in seen:
+                continue
+            seen.add(item["url"])
+            out.append(item)
+            if len(out) >= limit:
+                break
+        page += 1
+
+    return out[:limit]
+
+
+async def collect_ym(query: str, limit: int) -> List[dict]:
+    query_str = (query or "").strip()
+    if not query_str:
+        return []
+    cached = _ym_cache_get(query_str)
+    if cached is not None and len(cached) >= limit:
+        return cached[:limit]
+
+    async with _ym_semaphore:
+        try:
+            items = await asyncio.to_thread(_ym_collect_sync, query_str, limit)
+            _ym_cache_set(query_str, items)
+            return items[:limit]
+        except Exception as e:
+            logger.error("Yandex Market collect failed: %s", e, exc_info=True)
+            return []
 
 
 # ========================= OZON (Selenium + BS4) =========================
@@ -1460,7 +1913,7 @@ def _ozon_sync_collect(driver: webdriver.Chrome, query: str, limit: int, deadlin
 
 async def collect_ozon(query: str, limit: int) -> List[dict]:
     cached = _ozon_cache_get(query)
-    if cached is not None:
+    if cached is not None and len(cached) >= limit:
         return cached[:limit]
 
     def _ozon_collect_sync(q: str, lim: int) -> List[dict]:
@@ -1538,21 +1991,75 @@ async def shutdown_event():
 # ========================= API =========================
 
 @app.get("/api/products", response_model=UnifiedProductsResponse)
-async def get_products(request: Request, q: str = Query(..., description="Search query")):
+async def get_products(
+    request: Request,
+    q: str = Query(..., description="Search query"),
+    limit: Optional[int] = Query(None, ge=1, description="Page size"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+):
     if not isinstance(q, str) or not q.strip():
         raise HTTPException(status_code=400, detail="Invalid q")
 
     q = re.sub(r"\s+", " ", q).strip()
+    page_limit = int(limit) if limit is not None else int(DEFAULT_PAGE_ITEMS)
+    page_limit = max(1, min(int(page_limit), int(MAX_ITEMS)))
+    page_offset = max(0, int(offset))
+    if page_offset >= int(MAX_ITEMS):
+        return UnifiedProductsResponse(
+            query=q,
+            count=0,
+            items=[],
+            offset=page_offset,
+            limit=page_limit,
+            total=0,
+            has_more=False,
+        )
+
+    target = min(int(MAX_ITEMS), page_offset + page_limit)
     cache_key = f"products:{q.casefold()}"
     cached = get_from_cache(cache_key)
-    if cached:
-        return UnifiedProductsResponse(**cached)
+    cached_items = None
+    if cached and isinstance(cached, dict):
+        cached_items = cached.get("items")
+        if isinstance(cached_items, list) and len(cached_items) >= target:
+            slice_items = cached_items[page_offset : page_offset + page_limit]
+            items_models: List[ProductItem] = []
+            for item in slice_items:
+                try:
+                    items_models.append(ProductItem(**item))
+                except Exception:
+                    continue
+            total = len(cached_items)
+            returned_count = len(items_models)
+            has_more = returned_count > 0 and (page_offset + returned_count) < int(MAX_ITEMS)
+            return UnifiedProductsResponse(
+                query=q,
+                count=len(items_models),
+                items=items_models,
+                offset=page_offset,
+                limit=page_limit,
+                total=total,
+                has_more=has_more,
+            )
 
     task_coros = []
+    enabled_markets = 0
     if ENABLE_WB:
-        task_coros.append(collect_wb(q, WB_ITEMS))
+        enabled_markets += 1
+    if ENABLE_YM:
+        enabled_markets += 1
     if ENABLE_OZON:
-        task_coros.append(collect_ozon(q, OZON_ITEMS))
+        enabled_markets += 1
+
+    if ENABLE_WB:
+        wb_limit = _calc_market_limit(target, WB_ITEMS, enabled_markets)
+        task_coros.append(collect_wb(q, wb_limit))
+    if ENABLE_YM:
+        ym_limit = _calc_market_limit(target, YM_ITEMS, enabled_markets)
+        task_coros.append(collect_ym(q, ym_limit))
+    if ENABLE_OZON:
+        ozon_limit = _calc_market_limit(target, OZON_ITEMS, enabled_markets)
+        task_coros.append(collect_ozon(q, ozon_limit))
 
     if not task_coros:
         raise HTTPException(status_code=500, detail="No marketplaces enabled")
@@ -1576,23 +2083,45 @@ async def get_products(request: Request, q: str = Query(..., description="Search
 
     final_items: List[ProductItem] = []
     idx = 0
-    while len(final_items) < MAX_ITEMS and any(idx < len(items) for items in item_lists):
+    while len(final_items) < target and any(idx < len(items) for items in item_lists):
         for items in item_lists:
             if idx < len(items):
                 final_items.append(items[idx])
-                if len(final_items) >= MAX_ITEMS:
+                if len(final_items) >= target:
                     break
         idx += 1
     elapsed = (datetime.now() - start_time).total_seconds()
     logger.info("Query=%s items=%s time=%.2fs", q, len(final_items), elapsed)
 
+    new_items_data = [it.model_dump() for it in final_items]
+    merged_items = _merge_items(cached_items or [], new_items_data, max_items=target)
+
     payload = {
         "query": q,
-        "count": len(final_items),
-        "items": [it.model_dump() for it in final_items],
+        "count": len(merged_items),
+        "items": merged_items,
     }
     set_to_cache(cache_key, payload)
-    return UnifiedProductsResponse(query=q, count=len(final_items), items=final_items)
+
+    slice_items = merged_items[page_offset : page_offset + page_limit]
+    items_models: List[ProductItem] = []
+    for item in slice_items:
+        try:
+            items_models.append(ProductItem(**item))
+        except Exception:
+            continue
+    total = len(merged_items)
+    returned_count = len(slice_items)
+    has_more = returned_count > 0 and (page_offset + returned_count) < int(MAX_ITEMS)
+    return UnifiedProductsResponse(
+        query=q,
+        count=len(items_models),
+        items=items_models,
+        offset=page_offset,
+        limit=page_limit,
+        total=total,
+        has_more=has_more,
+    )
 
 
 @app.get("/health")
@@ -1648,18 +2177,24 @@ def cache_stats():
         "cache_ttl": CACHE_TTL,
         "enable_wb": ENABLE_WB,
         "enable_ozon": ENABLE_OZON,
+        "enable_ym": ENABLE_YM,
         "wb_items": WB_ITEMS,
+        "ym_items": YM_ITEMS,
         "ozon_items": OZON_ITEMS,
         "search_total_timeout": SEARCH_TOTAL_TIMEOUT,
         "wb_task_timeout": WB_TASK_TIMEOUT,
         "ozon_task_timeout": OZON_TASK_TIMEOUT,
+        "ym_task_timeout": YM_TASK_TIMEOUT,
         "wb_api_timeout": WB_API_TIMEOUT,
+        "ym_api_timeout": YM_API_TIMEOUT,
         "wb_total_budget": WB_TOTAL_BUDGET,
+        "ym_total_budget": YM_TOTAL_BUDGET,
         "chrome_headless": CHROME_HEADLESS,
         "use_xvfb": USE_XVFB,
         "has_xvfb": HAS_XVFB,
         "has_stealth": HAS_STEALTH,
         "wb_concurrent_limit": WB_CONCURRENT_LIMIT,
+        "ym_concurrent_limit": YM_CONCURRENT_LIMIT,
         "ozon_browser_limit": OZON_BROWSER_LIMIT,
         "ozon_min_items": OZON_MIN_ITEMS,
         "ozon_total_budget": OZON_TOTAL_BUDGET,
@@ -1685,6 +2220,9 @@ def cache_stats():
         "wb_image_proxy_cache_size": len(_wb_img_cache),
         "ozon_cache_ttl": OZON_CACHE_TTL,
         "ozon_cache_size": len(_ozon_cache),
+        "ym_max_pages": YM_MAX_PAGES,
+        "ym_cache_ttl": YM_CACHE_TTL,
+        "ym_cache_size": len(_ym_cache),
     }
 
 

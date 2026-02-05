@@ -12,6 +12,23 @@
     color: #475467;
 }
 
+.grid-loading-initial {
+    grid-column: 1 / -1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 20px 0 6px;
+    color: #667085;
+    font-size: 15px;
+}
+
+.grid-loading-initial .grid-spinner {
+    width: 22px;
+    height: 22px;
+    border-width: 3px;
+}
+
 .empty-hint {
     grid-column: 1 / -1;
     padding: 18px 22px;
@@ -19,6 +36,37 @@
     background: #f8fafc;
     color: #475467;
     font-size: 15px;
+}
+
+.grid-load-more {
+    grid-column: 1 / -1;
+    height: 1px;
+}
+
+.grid-loading-more {
+    grid-column: 1 / -1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px 0 4px;
+    color: #667085;
+    font-size: 13px;
+}
+
+.grid-spinner {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid rgba(102, 112, 133, 0.35);
+    border-top-color: #1d4ed8;
+    animation: grid-spin 0.8s linear infinite;
+}
+
+@keyframes grid-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 @media (max-width: 900px) {

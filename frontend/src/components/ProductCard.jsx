@@ -2,6 +2,16 @@
 import './ProductCard.css';
 
 const DEFAULT_IMAGE = 'https://placehold.co/240x240/f0f0f0/333333?text=%D0%9D%D0%B5%D1%82+%D1%84%D0%BE%D1%82%D0%BE';
+const MARKETPLACE_META = {
+  wildberries: { label: 'Wildberries', className: 'marketplace-wb' },
+  wb: { label: 'Wildberries', className: 'marketplace-wb' },
+  ozon: { label: 'Ozon', className: 'marketplace-ozon' },
+  'yandex_market': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
+  'yandexmarket': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
+  'ymarket': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
+  'ym': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
+  'yandex': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
+};
 
 function ProductCard({ product }) {
   const [imageIndex, setImageIndex] = useState(0);
@@ -38,7 +48,10 @@ function ProductCard({ product }) {
     minimumFractionDigits: 0,
   }).format(priceValue);
 
-  const marketplaceName = product.marketplace || 'Неизвестно';
+  const marketplaceKey = (product?.marketplace || '').toString().trim().toLowerCase();
+  const marketplaceMeta = MARKETPLACE_META[marketplaceKey] || {};
+  const marketplaceName = marketplaceMeta.label || product.marketplace || 'Неизвестно';
+  const marketplaceClassName = marketplaceMeta.className || '';
   const productLink = product.url || product.product_url;
   const rating = product.rating ? Number(product.rating) : null;
   const reviews = product.reviews ? Number(product.reviews) : null;
@@ -103,7 +116,7 @@ function ProductCard({ product }) {
 
         {productLink ? (
           <a
-            className="product-card-marketplace"
+            className={`product-card-marketplace ${marketplaceClassName}`.trim()}
             href={productLink}
             target="_blank"
             rel="noopener noreferrer"
@@ -112,7 +125,7 @@ function ProductCard({ product }) {
             {marketplaceName}
           </a>
         ) : (
-          <p className="product-card-marketplace">{marketplaceName}</p>
+          <p className={`product-card-marketplace ${marketplaceClassName}`.trim()}>{marketplaceName}</p>
         )}
       </div>
     </div>

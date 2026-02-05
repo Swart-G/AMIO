@@ -108,4 +108,25 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-top: auto;
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: #f4f4f4;
+}
+
+.product-card-marketplace.marketplace-wb {
+    background: rgba(203, 17, 171, 0.1);
+    color: #b90f99;
+}
+
+.product-card-marketplace.marketplace-ozon {
+    background: rgba(0, 91, 255, 0.1);
+    color: #005bff;
+}
+
+.product-card-marketplace.marketplace-ym {
+    background: rgba(255, 204, 0, 0.18);
+    color: #1d1d1d;
 }

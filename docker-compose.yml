@@ -38,8 +38,7 @@ services:
     container_name: marketplace_service
     env_file:
       - .env
-    networks:
-      - api_network
+    network_mode: host
 
   # --- Nginx (Gateway) ---
   nginx:
@@ -49,6 +48,8 @@ services:
     container_name: nginx
     ports:
       - "8000:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - auth_service
       - marketplace_service
