@@ -2,32 +2,20 @@
 const REFRESH_KEY = 'amio_refresh_token';
 
 export function getStoredTokens() {
-  try {
-    return {
-      access: localStorage.getItem(ACCESS_KEY) || '',
-      refresh: localStorage.getItem(REFRESH_KEY) || '',
-    };
-  } catch {
-    return { access: '', refresh: '' };
-  }
+  return {
+    access: localStorage.getItem(ACCESS_KEY) || '',
+    refresh: localStorage.getItem(REFRESH_KEY) || '',
+  };
 }
 
 export function storeTokens(access, refresh) {
-  try {
-    if (access) localStorage.setItem(ACCESS_KEY, access);
-    if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
-  } catch {
-    // ignore storage errors (private mode / blocked storage)
-  }
+  if (access) localStorage.setItem(ACCESS_KEY, access);
+  if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
 }
 
 export function clearTokens() {
-  try {
-    localStorage.removeItem(ACCESS_KEY);
-    localStorage.removeItem(REFRESH_KEY);
-  } catch {
-    // ignore storage errors
-  }
+  localStorage.removeItem(ACCESS_KEY);
+  localStorage.removeItem(REFRESH_KEY);
 }
 
 async function refreshTokens(refreshToken) {

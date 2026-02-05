@@ -2,15 +2,28 @@
 import './ProductCard.css';
 
 const DEFAULT_IMAGE = 'https://placehold.co/240x240/f0f0f0/333333?text=%D0%9D%D0%B5%D1%82+%D1%84%D0%BE%D1%82%D0%BE';
-const MARKETPLACE_META = {
-  wildberries: { label: 'Wildberries', className: 'marketplace-wb' },
-  wb: { label: 'Wildberries', className: 'marketplace-wb' },
-  ozon: { label: 'Ozon', className: 'marketplace-ozon' },
-  'yandex_market': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
-  'yandexmarket': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
-  'ymarket': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
-  'ym': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
-  'yandex': { label: 'Яндекс Маркет', className: 'marketplace-ym' },
+
+const normalizeMarketplaceName = (value) => {
+  if (typeof value !== 'string' || !value.trim()) return 'Неизвестно';
+
+  const rawValue = value.trim();
+  const normalized = rawValue.toUpperCase().replace(/[\s.-]+/g, '_');
+
+  if (normalized === 'YANDEX_MARKET' || normalized === 'YANDEXMARKET') {
+    return 'Яндекс Маркет';
+  }
+
+  return rawValue;
+};
+
+const parsePrice = (value) => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value === 'string') {
+    const normalized = value.replace(/\s+/g, '').replace(',', '.');
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 };
 
 function ProductCard({ product }) {
@@ -41,18 +54,16 @@ function ProductCard({ product }) {
 
   const imageUrl = imageCandidates[imageIndex] || DEFAULT_IMAGE;
 
-  const priceValue = Number(product.price) || 0;
+  const priceValue = parsePrice(product.price);
   const formattedPrice = new Intl.NumberFormat('ru-RU', {
     style: 'currency',
     currency: 'RUB',
     minimumFractionDigits: 0,
   }).format(priceValue);
 
-  const marketplaceKey = (product?.marketplace || '').toString().trim().toLowerCase();
-  const marketplaceMeta = MARKETPLACE_META[marketplaceKey] || {};
-  const marketplaceName = marketplaceMeta.label || product.marketplace || 'Неизвестно';
-  const marketplaceClassName = marketplaceMeta.className || '';
+  const marketplaceName = normalizeMarketplaceName(product.marketplace);
   const productLink = product.url || product.product_url;
+  const isInteractive = Boolean(productLink);
   const rating = product.rating ? Number(product.rating) : null;
   const reviews = product.reviews ? Number(product.reviews) : null;
 
@@ -62,8 +73,16 @@ function ProductCard({ product }) {
   };
 
   const handleOpen = () => {
-    if (productLink) {
-      window.open(productLink, '_blank', 'noopener,noreferrer');
+    if (!productLink) return;
+    if (document.body.classList.contains('mobile-nav-open')) return;
+    window.open(productLink, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleKeyDown = (event) => {
+    if (!isInteractive) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleOpen();
     }
   };
 
@@ -78,7 +97,13 @@ function ProductCard({ product }) {
   };
 
   return (
-    <div className="product-card" onClick={handleOpen}>
+    <div
+      className={`product-card ${isInteractive ? 'product-card--interactive' : ''}`}
+      onClick={handleOpen}
+      onKeyDown={handleKeyDown}
+      role={isInteractive ? 'link' : undefined}
+      tabIndex={isInteractive ? 0 : undefined}
+    >
       <div className="product-card-image-wrapper">
         <img
           className="product-card-image"
@@ -90,7 +115,7 @@ function ProductCard({ product }) {
       </div>
 
       <div className="product-card-details">
-        <button className="favorite-button" onClick={handleFavoriteClick} type="button">
+        <button className="favorite-button" onClick={handleFavoriteClick} type="button" aria-label="Добавить в избранное">
           <svg
             className="heart-icon"
             viewBox="0 0 24 24"
@@ -116,7 +141,7 @@ function ProductCard({ product }) {
 
         {productLink ? (
           <a
-            className={`product-card-marketplace ${marketplaceClassName}`.trim()}
+            className="product-card-marketplace"
             href={productLink}
             target="_blank"
             rel="noopener noreferrer"
@@ -125,7 +150,7 @@ function ProductCard({ product }) {
             {marketplaceName}
           </a>
         ) : (
-          <p className={`product-card-marketplace ${marketplaceClassName}`.trim()}>{marketplaceName}</p>
+          <p className="product-card-marketplace">{marketplaceName}</p>
         )}
       </div>
     </div>

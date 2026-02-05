@@ -2,16 +2,22 @@
     background-color: #fff;
     border-radius: 12px;
     overflow: hidden;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.05);
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    cursor: pointer;
+    border: 1px solid #e9eef6;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.04);
+    transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+    cursor: default;
     display: flex;
     flex-direction: column;
 }
 
-.product-card:hover {
+.product-card--interactive {
+    cursor: pointer;
+}
+
+.product-card--interactive:hover {
     transform: translateY(-5px);
-    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+    border-color: #dce6f6;
 }
 
 .product-card-image-wrapper {
@@ -32,7 +38,7 @@
     transition: transform 0.3s ease;
 }
 
-.product-card:hover .product-card-image {
+.product-card--interactive:hover .product-card-image {
     transform: scale(1.05);
 }
 
@@ -96,6 +102,8 @@
 
 .product-card-meta {
     display: flex;
+    align-items: center;
+    flex-wrap: wrap;
     gap: 10px;
     font-size: 12px;
     color: #667085;
@@ -105,28 +113,31 @@
     font-size: 11px;
     font-weight: 700;
     color: #222;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.2px;
     margin-top: auto;
-    display: inline-flex;
-    align-items: center;
-    width: fit-content;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: #f4f4f4;
 }
 
-.product-card-marketplace.marketplace-wb {
-    background: rgba(203, 17, 171, 0.1);
-    color: #b90f99;
+.product-card--interactive:focus-visible {
+    outline: 2px solid #99c8ff;
+    outline-offset: 2px;
 }
 
-.product-card-marketplace.marketplace-ozon {
-    background: rgba(0, 91, 255, 0.1);
-    color: #005bff;
-}
+@media (max-width: 480px) {
+    .product-card-price {
+        font-size: 16px;
+    }
+    
+    .product-card-name {
+        font-size: 12px;
+        min-height: 32px; /* Чуть меньше для экономии места */
+    }
 
-.product-card-marketplace.marketplace-ym {
-    background: rgba(255, 204, 0, 0.18);
-    color: #1d1d1d;
+    .product-card-details {
+        padding: 8px 10px;
+    }
+
+    .heart-icon {
+        width: 18px;
+        height: 18px;
+    }
 }

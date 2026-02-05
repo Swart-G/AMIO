@@ -17,13 +17,32 @@ body {
   min-height: 100vh;
 }
 
+body.mobile-nav-open main {
+  pointer-events: none;
+  user-select: none;
+}
+
 .content-max-width {
   width: 100%;
   max-width: 1440px;
   margin: 0 auto;
+  padding-inline: 60px;
 }
 
 main {
   width: 100%;
   padding-top: 96px;
+  padding-bottom: 20px;
+}
+
+/* Настройки для мобильных устройств */
+@media (max-width: 768px) {
+  .content-max-width {
+    padding-inline: 15px;
+  }
+
+  main {
+    padding-top: 136px;
+    padding-bottom: 16px;
+  }
 }
