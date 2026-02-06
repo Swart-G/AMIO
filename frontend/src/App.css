@@ -15,6 +15,8 @@ body {
 
 .main-container {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .content-max-width {
@@ -28,6 +30,19 @@ main {
   width: 100%;
   padding-top: 96px;
   padding-bottom: 20px;
+  flex: 1;
+}
+
+.site-footer {
+  width: 100%;
+  background-color: #ffffff;
+  border-top: 1px solid #e5e7eb;
+  padding-inline: 60px;
+  padding-top: 8px;
+  padding-bottom: 20px;
+  color: #5f6881;
+  font-size: 14px;
+  line-height: 1.4;
 }
 
 @media (max-width: 768px) {
@@ -37,6 +52,12 @@ main {
 
   main {
     padding-top: 136px;
+    padding-bottom: 16px;
+  }
+
+  .site-footer {
+    padding-inline: 15px;
+    font-size: 13px;
     padding-bottom: 16px;
   }
 }

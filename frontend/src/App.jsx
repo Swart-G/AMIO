@@ -54,6 +54,10 @@ function App() {
           <ProductGrid searchQuery={normalizedSearchQuery} />
         </main>
 
+        <footer className="site-footer">
+          По всем вопросам и предложениям, пожалуйста, обращайтесь в Telegram: @swarthing.
+        </footer>
+
         <AuthModal
           isOpen={authOpen}
           mode={authMode}
