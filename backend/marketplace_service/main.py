@@ -106,6 +106,11 @@ YM_CACHE_TTL = int(os.getenv("YM_CACHE_TTL", "300"))
 YM_LR = os.getenv("YM_LR", "").strip()
 YM_GPS = os.getenv("YM_GPS", "").strip()
 YM_BASE_URL = os.getenv("YM_BASE_URL", "https://market.yandex.ru/search").strip()
+HOMEPAGE_ITEMS_PER_MARKET = int(os.getenv("HOMEPAGE_ITEMS_PER_MARKET", "12"))
+HOMEPAGE_MIN_ITEMS = int(os.getenv("HOMEPAGE_MIN_ITEMS", "3"))
+HOMEPAGE_FALLBACK_QUERY = os.getenv("HOMEPAGE_FALLBACK_QUERY", "популярное").strip() or "популярное"
+HOMEPAGE_HTTP_TIMEOUT = float(os.getenv("HOMEPAGE_HTTP_TIMEOUT", "4.0"))
+HOMEPAGE_CACHE_TTL = int(os.getenv("HOMEPAGE_CACHE_TTL", "3600"))
 
 WB_ITEMS = int(os.getenv("WB_ITEMS", "35"))
 WB_CONCURRENT_LIMIT = int(os.getenv("WB_CONCURRENT_LIMIT", "4"))
@@ -194,6 +199,9 @@ _ozon_cache_lock = threading.RLock()
 
 _ym_cache: Dict[str, Tuple[List[dict], datetime]] = {}
 _ym_cache_lock = threading.RLock()
+
+_homepage_cache: Dict[str, Tuple[List[dict], datetime]] = {}
+_homepage_cache_lock = threading.RLock()
 
 _wb_img_cache: Dict[str, Tuple[str, datetime]] = {}
 _wb_img_cache_lock = threading.RLock()
@@ -317,6 +325,28 @@ def _ym_cache_set(query: str, items: List[dict]):
         _ym_cache[query] = (items, datetime.now())
 
 
+def _homepage_cache_get(key: str) -> Optional[List[dict]]:
+    if HOMEPAGE_CACHE_TTL <= 0:
+        return None
+    now = datetime.now()
+    with _homepage_cache_lock:
+        item = _homepage_cache.get(key)
+        if not item:
+            return None
+        data, ts = item
+        if (now - ts).total_seconds() <= HOMEPAGE_CACHE_TTL:
+            return data
+        _homepage_cache.pop(key, None)
+        return None
+
+
+def _homepage_cache_set(key: str, items: List[dict]):
+    if HOMEPAGE_CACHE_TTL <= 0:
+        return
+    with _homepage_cache_lock:
+        _homepage_cache[key] = (items, datetime.now())
+
+
 def digits_only(s: str) -> str:
     return re.sub(r"[^\d]", "", s or "")
 
@@ -394,6 +424,163 @@ def _merge_items(existing: List[dict], new_items: List[dict], max_items: int) ->
         if len(out) >= max_items:
             break
     return out[:max_items]
+
+
+def _shuffle_items(items: List[dict]) -> List[dict]:
+    if len(items) <= 1:
+        return list(items)
+    shuffled = list(items)
+    random.shuffle(shuffled)
+    return shuffled
+
+
+def _extract_anchor_text(anchor) -> str:
+    if anchor is None:
+        return ""
+    return _clean_spaces(
+        (anchor.get("title") or "")
+        or (anchor.get("aria-label") or "")
+        or anchor.get_text(" ", strip=True)
+    )
+
+
+def _fetch_html(url: str, timeout: Optional[float] = None) -> str:
+    req = UrlRequest(
+        url,
+        headers={
+            "User-Agent": UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+            "Connection": "close",
+        },
+    )
+    with urlopen(req, timeout=timeout or HOMEPAGE_HTTP_TIMEOUT) as resp:
+        raw = resp.read()
+    return raw.decode("utf-8", errors="ignore")
+
+
+def _wb_extract_homepage_items(html: str, limit: int) -> List[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    seen: Set[str] = set()
+    out: List[dict] = []
+
+    for anchor in soup.select("a[href*='/catalog/'][href*='/detail.aspx']"):
+        href = (anchor.get("href") or "").strip()
+        if not href:
+            continue
+        url = href if href.startswith("http") else "https://www.wildberries.ru" + href
+        name = _extract_anchor_text(anchor)
+        if not name:
+            continue
+
+        parent_text = _clean_spaces(anchor.parent.get_text(" ", strip=True) if anchor.parent else "")
+        price = digits_only(parent_text) or "0"
+        item = {
+            "marketplace": "wildberries",
+            "name": name,
+            "url": url.split("?", 1)[0],
+            "price": price,
+            "rating": "",
+            "reviews": "",
+            "img_url": "",
+            "image_urls": None,
+        }
+        if valid_product_item(item, seen):
+            seen.add(item["url"])
+            out.append(item)
+            if len(out) >= limit:
+                break
+
+    return out[:limit]
+
+
+def _ym_extract_homepage_items(html: str, limit: int) -> List[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    cards = soup.select('[data-zone-name="productSnippet"], article[data-auto="searchOrganic"]')
+    seen: Set[str] = set()
+    out: List[dict] = []
+
+    for card in cards:
+        item = _ym_parse_card(card)
+        if item and valid_product_item(item, seen):
+            seen.add(item["url"])
+            out.append(item)
+            if len(out) >= limit:
+                break
+
+    return out[:limit]
+
+
+def _ozon_collect_homepage_sync(limit: int) -> List[dict]:
+    driver = _ozon_get_reusable_driver()
+    ok = False
+    try:
+        driver.get("https://www.ozon.ru/")
+        time.sleep(0.2 + random.uniform(0.05, 0.15))
+        wait_first = min(float(OZON_WAIT_FIRST), 2.0)
+        try:
+            WebDriverWait(driver, wait_first).until(
+                lambda d: len(d.find_elements(By.CSS_SELECTOR, OZON_TILE_SELECTOR)) >= 1
+            )
+        except TimeoutException:
+            return []
+
+        items = _ozon_fast_extract_items(driver, limit=limit)
+        ok = True
+        seen: Set[str] = set()
+        out: List[dict] = []
+        for item in items:
+            if valid_product_item(item, seen):
+                seen.add(item["url"])
+                out.append(item)
+                if len(out) >= limit:
+                    break
+        return out[:limit]
+    finally:
+        _ozon_release_driver(driver, ok=ok)
+
+
+async def collect_homepage_wb(limit: int) -> List[dict]:
+    out: List[dict] = []
+    try:
+        html = await asyncio.to_thread(_fetch_html, "https://www.wildberries.ru/")
+        out = await asyncio.to_thread(_wb_extract_homepage_items, html, limit)
+    except Exception as e:
+        logger.warning("WB homepage parse failed: %s", e)
+
+    if len(out) < min(int(HOMEPAGE_MIN_ITEMS), int(limit)):
+        fallback = await collect_wb(HOMEPAGE_FALLBACK_QUERY, limit)
+        out = _merge_items(out, fallback, max_items=limit)
+    return out[:limit]
+
+
+async def collect_homepage_ym(limit: int) -> List[dict]:
+    out: List[dict] = []
+    try:
+        html = await asyncio.to_thread(_fetch_html, "https://market.yandex.ru/")
+        if not _looks_like_ym_block(html):
+            out = await asyncio.to_thread(_ym_extract_homepage_items, html, limit)
+    except Exception as e:
+        logger.warning("YM homepage parse failed: %s", e)
+
+    if len(out) < min(int(HOMEPAGE_MIN_ITEMS), int(limit)):
+        fallback = await collect_ym(HOMEPAGE_FALLBACK_QUERY, limit)
+        out = _merge_items(out, fallback, max_items=limit)
+    return out[:limit]
+
+
+async def collect_homepage_ozon(limit: int) -> List[dict]:
+    out: List[dict] = []
+    async with _ozon_sem:
+        try:
+            out = await asyncio.to_thread(_ozon_collect_homepage_sync, limit)
+        except Exception as e:
+            logger.warning("Ozon homepage parse failed: %s", e)
+
+    if len(out) < min(int(HOMEPAGE_MIN_ITEMS), int(limit)):
+        fallback = await collect_ozon(HOMEPAGE_FALLBACK_QUERY, limit)
+        out = _merge_items(out, fallback, max_items=limit)
+    return out[:limit]
 
 
 def _looks_like_ym_block(html: str, title: str = "") -> bool:
@@ -2097,6 +2284,148 @@ async def get_products(
     )
 
 
+@app.get("/api/homepage-products", response_model=UnifiedProductsResponse)
+async def get_homepage_products(
+    limit: Optional[int] = Query(None, ge=1, description="Page size"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+):
+    page_limit = int(limit) if limit is not None else int(DEFAULT_PAGE_ITEMS)
+    page_limit = max(1, min(int(page_limit), int(MAX_ITEMS)))
+    page_offset = max(0, int(offset))
+
+    if page_offset >= int(MAX_ITEMS):
+        return UnifiedProductsResponse(
+            query="homepage",
+            count=0,
+            items=[],
+            offset=page_offset,
+            limit=page_limit,
+            total=0,
+            has_more=False,
+        )
+
+    target = min(int(MAX_ITEMS), page_offset + page_limit)
+    cache_key = "homepage_products"
+    cached_items = _homepage_cache_get(cache_key) or []
+    if len(cached_items) >= target:
+        slice_items = cached_items[page_offset : page_offset + page_limit]
+        items_models: List[ProductItem] = []
+        for item in slice_items:
+            try:
+                items_models.append(ProductItem(**item))
+            except Exception:
+                continue
+        returned_count = len(items_models)
+        has_more = (
+            (page_offset + returned_count) < len(cached_items)
+            or (
+                returned_count == page_limit
+                and (page_offset + returned_count) < int(MAX_ITEMS)
+            )
+        )
+        return UnifiedProductsResponse(
+            query="homepage",
+            count=returned_count,
+            items=items_models,
+            offset=page_offset,
+            limit=page_limit,
+            total=len(cached_items),
+            has_more=has_more,
+        )
+
+    task_coros = []
+    enabled_markets = 0
+    if ENABLE_WB:
+        enabled_markets += 1
+    if ENABLE_YM:
+        enabled_markets += 1
+    if ENABLE_OZON:
+        enabled_markets += 1
+
+    if not enabled_markets:
+        raise HTTPException(status_code=500, detail="No marketplaces enabled")
+
+    per_market_limit = max(
+        int(HOMEPAGE_ITEMS_PER_MARKET),
+        _calc_market_limit(target, int(MAX_ITEMS), enabled_markets),
+    )
+    if ENABLE_WB:
+        task_coros.append(collect_homepage_wb(per_market_limit))
+    if ENABLE_YM:
+        task_coros.append(collect_homepage_ym(per_market_limit))
+    if ENABLE_OZON:
+        task_coros.append(collect_homepage_ozon(per_market_limit))
+
+    start_time = datetime.now()
+    parts: List[object] = await asyncio.gather(*task_coros, return_exceptions=True)
+
+    item_lists: List[List[ProductItem]] = []
+    for part in parts:
+        if isinstance(part, Exception):
+            logger.error("Homepage task failed: %s", part, exc_info=True)
+            continue
+        items: List[ProductItem] = []
+        for item in part:
+            try:
+                items.append(ProductItem(**item))
+            except Exception:
+                continue
+        if items:
+            item_lists.append(items)
+
+    final_items: List[ProductItem] = []
+    idx = 0
+    while len(final_items) < target and any(idx < len(items) for items in item_lists):
+        for items in item_lists:
+            if idx < len(items):
+                final_items.append(items[idx])
+                if len(final_items) >= target:
+                    break
+        idx += 1
+
+    elapsed = (datetime.now() - start_time).total_seconds()
+    logger.info("Homepage items=%s time=%.2fs", len(final_items), elapsed)
+
+    merged_items = _merge_items(
+        cached_items,
+        [it.model_dump() for it in final_items],
+        max_items=int(MAX_ITEMS),
+    )
+    if cached_items:
+        cached_len = len(cached_items)
+        newly_added = merged_items[cached_len:]
+        random.shuffle(newly_added)
+        final_ordered_items = merged_items[:cached_len] + newly_added
+    else:
+        final_ordered_items = _shuffle_items(merged_items)
+    _homepage_cache_set(cache_key, final_ordered_items)
+
+    slice_items = final_ordered_items[page_offset : page_offset + page_limit]
+    items_models: List[ProductItem] = []
+    for item in slice_items:
+        try:
+            items_models.append(ProductItem(**item))
+        except Exception:
+            continue
+    returned_count = len(items_models)
+    has_more = (
+        (page_offset + returned_count) < len(final_ordered_items)
+        or (
+            returned_count == page_limit
+            and (page_offset + returned_count) < int(MAX_ITEMS)
+        )
+    )
+    return UnifiedProductsResponse(
+        query="homepage",
+        count=returned_count,
+        items=items_models,
+        offset=page_offset,
+        limit=page_limit,
+        total=len(final_ordered_items),
+        has_more=has_more,
+    )
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "10.0.0"}
@@ -2196,6 +2525,8 @@ def cache_stats():
         "ym_max_pages": YM_MAX_PAGES,
         "ym_cache_ttl": YM_CACHE_TTL,
         "ym_cache_size": len(_ym_cache),
+        "homepage_cache_ttl": HOMEPAGE_CACHE_TTL,
+        "homepage_cache_size": len(_homepage_cache),
     }
 
 

@@ -106,16 +106,6 @@ function ProductCard({ product }) {
       tabIndex={isInteractive ? 0 : undefined}
     >
       <div className="product-card-image-wrapper">
-        <img
-          className="product-card-image"
-          src={imageUrl}
-          alt={product.name || product.title || 'Товар'}
-          onError={handleImageError}
-          loading="lazy"
-        />
-      </div>
-
-      <div className="product-card-details">
         <button className="favorite-button" onClick={handleFavoriteClick} type="button" aria-label="Добавить в избранное">
           <svg
             className="heart-icon"
@@ -129,16 +119,28 @@ function ProductCard({ product }) {
             <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
           </svg>
         </button>
+        <img
+          className="product-card-image"
+          src={imageUrl}
+          alt={product.name || product.title || 'Товар'}
+          onError={handleImageError}
+          loading="lazy"
+        />
+      </div>
 
+      <div className="product-card-details">
         <p className="product-card-price">{formattedPrice}</p>
         <p className="product-card-name">{product.name || product.title || 'Название товара'}</p>
 
-        {(rating || reviews) && (
-          <div className="product-card-meta">
-            {rating && <span className="meta-item">★ {rating.toFixed(1)}</span>}
-            {reviews && <span className="meta-item">{reviews} отзывов</span>}
-          </div>
-        )}
+        <div className={`product-card-meta ${!(rating || reviews) ? 'is-empty' : ''}`.trim()}>
+          {rating && (
+            <span className="meta-item meta-item-rating">
+              <span className={`rating-star ${rating > 4 ? 'rating-star--high' : ''}`}>★</span>
+              <span>{rating.toFixed(1)}</span>
+            </span>
+          )}
+          {reviews && <span className="meta-item">{reviews} отзывов</span>}
+        </div>
 
         {productLink ? (
           <a

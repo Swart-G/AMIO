@@ -17,11 +17,6 @@ body {
   min-height: 100vh;
 }
 
-body.mobile-nav-open main {
-  pointer-events: none;
-  user-select: none;
-}
-
 .content-max-width {
   width: 100%;
   max-width: 1440px;
