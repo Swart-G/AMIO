@@ -18,7 +18,7 @@ import shutil
 from datetime import datetime, timedelta
 from datetime import timezone
 from email.utils import parsedate_to_datetime
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus, urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -232,6 +232,22 @@ class UnifiedProductsResponse(BaseModel):
     limit: int = 0
     total: Optional[int] = None
     has_more: Optional[bool] = None
+
+
+class ProductPriceRequest(BaseModel):
+    marketplace: str
+    url: str
+
+
+class ProductPriceResponse(BaseModel):
+    marketplace: str
+    url: str
+    canonical_url: Optional[str] = None
+    name: Optional[str] = None
+    price_amount_rub: Optional[int] = None
+    price_text: Optional[str] = None
+    status: str
+    fetched_at: datetime
 
 
 def get_from_cache(key: str) -> Optional[dict]:
@@ -2423,6 +2439,350 @@ async def get_homepage_products(
         limit=page_limit,
         total=len(final_ordered_items),
         has_more=has_more,
+    )
+
+
+_EXACT_MARKET_ALIASES = {
+    "wb": "wb",
+    "wildberries": "wb",
+    "ozon": "ozon",
+    "ym": "ym",
+    "yandex_market": "ym",
+    "yandexmarket": "ym",
+    "ymarket": "ym",
+    "yandex": "ym",
+}
+
+
+def _exact_now() -> datetime:
+    return datetime.utcnow()
+
+
+def _normalize_marketplace_exact(value: str) -> Optional[str]:
+    return _EXACT_MARKET_ALIASES.get((value or "").strip().lower())
+
+
+def _canonicalize_exact_url(url: str, marketplace: str) -> str:
+    parts = urlsplit((url or "").strip())
+    netloc = parts.netloc.lower().strip()
+    path = (parts.path or "/").rstrip("/") or "/"
+    if marketplace == "wb":
+        match = re.search(r"/catalog/(\d+)/detail\.aspx", path, flags=re.IGNORECASE)
+        if not match:
+            match = re.search(r"/catalog/(\d+)", path, flags=re.IGNORECASE)
+        if match:
+            return f"https://www.wildberries.ru/catalog/{match.group(1)}/detail.aspx"
+        return urlunsplit(("https", netloc or "www.wildberries.ru", path, "", ""))
+    if marketplace == "ozon":
+        query_pairs = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=False) if k.lower() in {"asb", "at"}]
+        return urlunsplit(("https", netloc or "www.ozon.ru", path, urlencode(query_pairs) if query_pairs else "", ""))
+    if marketplace == "ym":
+        query_pairs = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=False) if k.lower() in {"sku", "nid", "hid"}]
+        return urlunsplit(("https", netloc or "market.yandex.ru", path, urlencode(query_pairs) if query_pairs else "", ""))
+    return urlunsplit((parts.scheme or "https", netloc, path, parts.query, ""))
+
+
+def _price_int_to_text(price: Optional[int]) -> Optional[str]:
+    if price is None:
+        return None
+    try:
+        return f"{int(price)} ₽"
+    except Exception:
+        return None
+
+
+def _extract_price_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        iv = int(round(float(value)))
+        return iv if iv > 0 else None
+    text = str(value).strip()
+    if not text:
+        return None
+    digits = re.findall(r"\d+", text.replace("\xa0", " "))
+    if not digits:
+        return None
+    try:
+        joined = "".join(digits)
+        return int(joined) if joined else None
+    except Exception:
+        return None
+
+
+def _http_get_text_exact(url: str, timeout: float = 10.0) -> Tuple[Optional[str], Optional[str], str]:
+    headers = {
+        "User-Agent": UA,
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    if HAS_REQUESTS:
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            if not resp.encoding:
+                resp.encoding = resp.apparent_encoding or "utf-8"
+            return resp.text, str(resp.url or url), "ok"
+        except Exception as exc:
+            logger.warning("Exact GET text failed for %s: %s", url, exc)
+            return None, None, "network_error"
+    try:
+        req = UrlRequest(url, headers=headers)
+        with urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            return body, resp.geturl(), "ok"
+    except Exception as exc:
+        logger.warning("Exact GET text failed for %s: %s", url, exc)
+        return None, None, "network_error"
+
+
+def _http_get_json_exact(url: str, timeout: float = 10.0) -> Tuple[Optional[dict], str]:
+    headers = {
+        "User-Agent": UA,
+        "Accept": "application/json,text/plain,*/*",
+        "Referer": "https://www.wildberries.ru/",
+    }
+    if HAS_REQUESTS:
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            return resp.json(), "ok"
+        except Exception as exc:
+            logger.warning("Exact GET json failed for %s: %s", url, exc)
+            return None, "network_error"
+    try:
+        req = UrlRequest(url, headers=headers)
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="ignore") or "{}"), "ok"
+    except Exception as exc:
+        logger.warning("Exact GET json failed for %s: %s", url, exc)
+        return None, "network_error"
+
+
+def _extract_name_price_from_html(html: str) -> Tuple[Optional[str], Optional[int]]:
+    if not html:
+        return None, None
+    soup = BeautifulSoup(html, "html.parser")
+
+    name = None
+    for selector, attr in [
+        ("meta[property='og:title']", "content"),
+        ("meta[name='twitter:title']", "content"),
+        ("meta[itemprop='name']", "content"),
+    ]:
+        tag = soup.select_one(selector)
+        if tag and tag.get(attr):
+            name = tag.get(attr).strip()
+            if name:
+                break
+    if not name and soup.title and soup.title.string:
+        name = soup.title.string.strip()
+
+    price = None
+    for selector, attr in [
+        ("meta[property='product:price:amount']", "content"),
+        ("meta[itemprop='price']", "content"),
+    ]:
+        tag = soup.select_one(selector)
+        if tag and tag.get(attr):
+            price = _extract_price_int(tag.get(attr))
+            if price:
+                break
+
+    if price is None:
+        for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+            try:
+                payload = json.loads(script.get_text(strip=True))
+            except Exception:
+                continue
+            nodes = payload if isinstance(payload, list) else [payload]
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                if not name and isinstance(node.get("name"), str):
+                    name = node.get("name").strip() or name
+                offers = node.get("offers")
+                offer_nodes = offers if isinstance(offers, list) else [offers]
+                for offer in offer_nodes:
+                    if not isinstance(offer, dict):
+                        continue
+                    price = _extract_price_int(offer.get("price"))
+                    if price:
+                        break
+                if price:
+                    break
+            if price:
+                break
+
+    if price is None:
+        regexes = [
+            r'"price"\s*:\s*"?(?P<price>\d[\d\s]*)"?',
+            r'"priceAmount"\s*:\s*"?(?P<price>\d[\d\s]*)"?',
+            r'"currentPrice"\s*:\s*"?(?P<price>\d[\d\s]*)"?',
+        ]
+        for pattern in regexes:
+            match = re.search(pattern, html)
+            if match:
+                price = _extract_price_int(match.group("price"))
+                if price:
+                    break
+
+    return name, price
+
+
+def _exact_wb_by_url(url: str) -> dict:
+    match = re.search(r"/catalog/(\d+)", url or "", flags=re.IGNORECASE)
+    if not match:
+        return {
+            "status": "unsupported_url",
+            "canonical_url": _canonicalize_exact_url(url, "wb"),
+            "name": None,
+            "price_amount_rub": None,
+            "price_text": None,
+        }
+    nm_id = int(match.group(1))
+    canonical = f"https://www.wildberries.ru/catalog/{nm_id}/detail.aspx"
+    api_url = (
+        "https://card.wb.ru/cards/v2/detail"
+        f"?appType={quote_plus(str(WB_APP_TYPE))}"
+        f"&curr={quote_plus(str(WB_CURR))}"
+        f"&dest={quote_plus(str(WB_DEST))}"
+        f"&spp={quote_plus(str(WB_SPP))}"
+        f"&nm={nm_id}"
+    )
+    data, json_status = _http_get_json_exact(api_url, timeout=max(2.0, float(WB_API_TIMEOUT)))
+    if data and json_status == "ok":
+        products = ((data.get("data") or {}).get("products") or [])
+        product = products[0] if isinstance(products, list) and products else None
+        if isinstance(product, dict):
+            raw_price = product.get("salePriceU") or product.get("priceU")
+            if raw_price is None and isinstance(product.get("extended"), dict):
+                raw_price = product.get("extended", {}).get("basicPriceU")
+            price = _extract_price_int(raw_price)
+            if price and raw_price and str(raw_price).isdigit() and int(raw_price) >= 1000:
+                # WB APIs typically return kopecks.
+                price = int(round(int(raw_price) / 100))
+            if not price:
+                price = _extract_price_int(product.get("salePrice"))
+            name = (product.get("name") or "").strip() or None
+            return {
+                "status": "ok" if price is not None else "parse_error",
+                "canonical_url": canonical,
+                "name": name,
+                "price_amount_rub": price,
+                "price_text": _price_int_to_text(price),
+            }
+
+    html, final_url, html_status = _http_get_text_exact(canonical, timeout=8.0)
+    if html_status != "ok" or not html:
+        return {
+            "status": html_status,
+            "canonical_url": canonical,
+            "name": None,
+            "price_amount_rub": None,
+            "price_text": None,
+        }
+    name, price = _extract_name_price_from_html(html)
+    return {
+        "status": "ok" if price is not None else "parse_error",
+        "canonical_url": _canonicalize_exact_url(final_url or canonical, "wb"),
+        "name": name,
+        "price_amount_rub": price,
+        "price_text": _price_int_to_text(price),
+    }
+
+
+def _exact_ozon_by_url(url: str) -> dict:
+    html, final_url, status_text = _http_get_text_exact(url, timeout=10.0)
+    canonical = _canonicalize_exact_url(final_url or url, "ozon")
+    if status_text != "ok" or not html:
+        return {
+            "status": status_text,
+            "canonical_url": canonical,
+            "name": None,
+            "price_amount_rub": None,
+            "price_text": None,
+        }
+    name, price = _extract_name_price_from_html(html)
+    return {
+        "status": "ok" if price is not None else "parse_error",
+        "canonical_url": canonical,
+        "name": name,
+        "price_amount_rub": price,
+        "price_text": _price_int_to_text(price),
+    }
+
+
+def _exact_ym_by_url(url: str) -> dict:
+    html, final_url, status_text = _http_get_text_exact(url, timeout=10.0)
+    canonical = _canonicalize_exact_url(final_url or url, "ym")
+    if status_text != "ok" or not html:
+        return {
+            "status": status_text,
+            "canonical_url": canonical,
+            "name": None,
+            "price_amount_rub": None,
+            "price_text": None,
+        }
+    name, price = _extract_name_price_from_html(html)
+    return {
+        "status": "ok" if price is not None else "parse_error",
+        "canonical_url": canonical,
+        "name": name,
+        "price_amount_rub": price,
+        "price_text": _price_int_to_text(price),
+    }
+
+
+@app.post("/api/product-price", response_model=ProductPriceResponse)
+def get_product_price(payload: ProductPriceRequest):
+    marketplace = _normalize_marketplace_exact(payload.marketplace)
+    raw_url = (payload.url or "").strip()
+    if not marketplace:
+        raise HTTPException(status_code=400, detail="Unsupported marketplace")
+    if not raw_url:
+        raise HTTPException(status_code=400, detail="Invalid url")
+
+    try:
+        if marketplace == "wb":
+            result = _exact_wb_by_url(raw_url)
+        elif marketplace == "ozon":
+            result = _exact_ozon_by_url(raw_url)
+        elif marketplace == "ym":
+            result = _exact_ym_by_url(raw_url)
+        else:
+            result = {
+                "status": "unsupported_url",
+                "canonical_url": _canonicalize_exact_url(raw_url, marketplace),
+                "name": None,
+                "price_amount_rub": None,
+                "price_text": None,
+            }
+    except Exception as exc:
+        logger.error("Exact product price parse failed marketplace=%s url=%s err=%s", marketplace, raw_url, exc, exc_info=True)
+        result = {
+            "status": "network_error",
+            "canonical_url": _canonicalize_exact_url(raw_url, marketplace),
+            "name": None,
+            "price_amount_rub": None,
+            "price_text": None,
+        }
+
+    status_value = str(result.get("status") or "parse_error").strip().lower()
+    if status_value not in {"ok", "unavailable", "parse_error", "network_error", "unsupported_url"}:
+        status_value = "parse_error"
+
+    return ProductPriceResponse(
+        marketplace=marketplace,
+        url=raw_url,
+        canonical_url=result.get("canonical_url"),
+        name=result.get("name"),
+        price_amount_rub=result.get("price_amount_rub"),
+        price_text=result.get("price_text"),
+        status=status_value,
+        fetched_at=_exact_now(),
     )
 
 

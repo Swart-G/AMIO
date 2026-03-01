@@ -45,6 +45,57 @@ main {
   line-height: 1.4;
 }
 
+.auth-action-card {
+  margin: 18px auto 0;
+  max-width: 720px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: 0 12px 30px rgba(17, 24, 39, 0.06);
+  display: grid;
+  gap: 10px;
+}
+
+.auth-action-card h1 {
+  margin: 0;
+  font-size: 22px;
+  color: #111827;
+}
+
+.auth-action-message {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.auth-action-message.is-loading {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.auth-action-message.is-success {
+  background: #ecfdf3;
+  color: #027a48;
+}
+
+.auth-action-message.is-error {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.auth-action-button {
+  justify-self: start;
+  border: none;
+  border-radius: 10px;
+  background: #2563eb;
+  color: #fff;
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 @media (max-width: 768px) {
   .content-max-width {
     padding-inline: 15px;
@@ -59,5 +110,14 @@ main {
     padding-inline: 15px;
     font-size: 13px;
     padding-bottom: 16px;
+  }
+
+  .auth-action-card {
+    padding: 16px;
+    border-radius: 14px;
+  }
+
+  .auth-action-card h1 {
+    font-size: 18px;
   }
 }

@@ -137,6 +137,11 @@
   background: #f1f6ff;
 }
 
+.nav-icon-btn.is-active {
+  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.1);
+}
+
 .nav-icon-btn span {
   display: none;
 }

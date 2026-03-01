@@ -1,8 +1,9 @@
-FROM node:20-alpine AS frontend-build
+FROM node:20-bookworm-slim AS frontend-build
 
 WORKDIR /frontend
 COPY frontend/package.json ./package.json
-RUN npm install --no-audit --no-fund
+COPY frontend/package-lock.json ./package-lock.json
+RUN npm ci --no-audit --no-fund
 COPY frontend/ .
 RUN npm run build
 

@@ -13,7 +13,14 @@ import {
 } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
 
-function Header({ searchQuery = '', onSearch, onHomeClick, onAuthOpen }) {
+function Header({
+  searchQuery = '',
+  onSearch,
+  onHomeClick,
+  onFavoritesClick,
+  activeNavKey = null,
+  onAuthOpen,
+}) {
   const { user, logout } = useAuth();
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
@@ -117,19 +124,18 @@ function Header({ searchQuery = '', onSearch, onHomeClick, onAuthOpen }) {
   };
 
   const handleProfileClick = () => {
-    if (user) return;
     closeDrawer();
-    onAuthOpen?.('login');
+    onAuthOpen?.(user ? 'profile' : 'login');
   };
 
   const handleManageProfile = () => {
     setIsDesktopProfileMenuOpen(false);
-    onAuthOpen?.('change');
+    onAuthOpen?.('profile');
   };
 
   const navItems = [
-    { key: 'favorites', label: 'Избранное', icon: FiHeart },
-    { key: 'notifications', label: 'Уведомления', icon: FiBell },
+    { key: 'favorites', label: 'Избранное', icon: FiHeart, onClick: onFavoritesClick },
+    { key: 'notifications', label: 'Уведомления', icon: FiBell, onClick: () => {} },
   ];
 
   return (
@@ -174,7 +180,14 @@ function Header({ searchQuery = '', onSearch, onHomeClick, onAuthOpen }) {
 
           <nav className="header-nav" aria-hidden={isMobileView}>
             <div className="nav-items">
-              <button className="nav-icon-btn" type="button" aria-label="Избранное"><FiHeart /> <span>Избранное</span></button>
+              <button
+                className={`nav-icon-btn ${activeNavKey === 'favorites' ? 'is-active' : ''}`.trim()}
+                type="button"
+                aria-label="Избранное"
+                onClick={onFavoritesClick}
+              >
+                <FiHeart /> <span>Избранное</span>
+              </button>
               <button className="nav-icon-btn" type="button" aria-label="Уведомления"><FiBell /> <span>Уведомления</span></button>
 
               <div className="nav-auth">
@@ -265,7 +278,15 @@ function Header({ searchQuery = '', onSearch, onHomeClick, onAuthOpen }) {
             {navItems.map((item) => {
               const Icon = item.icon;
               return (
-                <button key={item.key} className="drawer-item" type="button">
+                <button
+                  key={item.key}
+                  className={`drawer-item ${activeNavKey === item.key ? 'is-active' : ''}`.trim()}
+                  type="button"
+                  onClick={() => {
+                    item.onClick?.();
+                    closeDrawer();
+                  }}
+                >
                   <Icon className="nav-ic" />
                   <span>{item.label}</span>
                 </button>

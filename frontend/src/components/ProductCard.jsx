@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import './ProductCard.css';
+import { useFavorites } from '../context/FavoritesContext';
 
 const DEFAULT_IMAGE = 'https://placehold.co/240x240/f0f0f0/333333?text=%D0%9D%D0%B5%D1%82+%D1%84%D0%BE%D1%82%D0%BE';
 const MARKETPLACE_META = {
@@ -23,8 +24,10 @@ const parsePrice = (value) => {
   return 0;
 };
 
-function ProductCard({ product }) {
+function ProductCard({ product, onAuthOpen }) {
   const [imageIndex, setImageIndex] = useState(0);
+  const { isFavoritedProduct, isFavoritePending, toggleFavoriteProduct } = useFavorites();
+  const [favoriteError, setFavoriteError] = useState('');
 
   const imageCandidates = useMemo(() => {
     const candidates = [];
@@ -67,10 +70,22 @@ function ProductCard({ product }) {
   const isInteractive = Boolean(productLink);
   const rating = product.rating ? Number(product.rating) : null;
   const reviews = product.reviews ? Number(product.reviews) : null;
+  const isFavorited = isFavoritedProduct(product);
+  const favoritePending = isFavoritePending(product);
 
-  const handleFavoriteClick = (event) => {
+  const handleFavoriteClick = async (event) => {
+    event.preventDefault();
     event.stopPropagation();
-    console.log(`Лайк: ${product.name || product.title}`);
+    setFavoriteError('');
+    try {
+      const result = await toggleFavoriteProduct(product);
+      if (result?.requiresAuth) {
+        onAuthOpen?.('login');
+      }
+    } catch (error) {
+      setFavoriteError(error.message || 'Не удалось обновить избранное');
+      console.error('Ошибка работы с избранным:', error);
+    }
   };
 
   const handleOpen = () => {
@@ -106,11 +121,19 @@ function ProductCard({ product }) {
       tabIndex={isInteractive ? 0 : undefined}
     >
       <div className="product-card-image-wrapper">
-        <button className="favorite-button" onClick={handleFavoriteClick} type="button" aria-label="Добавить в избранное">
+        <button
+          className={`favorite-button ${isFavorited ? 'is-active' : ''} ${favoritePending ? 'is-loading' : ''}`.trim()}
+          onClick={handleFavoriteClick}
+          type="button"
+          aria-label={isFavorited ? 'Убрать из избранного' : 'Добавить в избранное'}
+          aria-pressed={isFavorited}
+          disabled={favoritePending}
+          title={favoriteError || undefined}
+        >
           <svg
             className="heart-icon"
             viewBox="0 0 24 24"
-            fill="none"
+            fill={isFavorited ? 'currentColor' : 'none'}
             stroke="currentColor"
             strokeWidth="2"
             strokeLinecap="round"
@@ -141,6 +164,8 @@ function ProductCard({ product }) {
           )}
           {reviews && <span className="meta-item">{reviews} отзывов</span>}
         </div>
+
+        {favoriteError && <p className="product-card-favorite-error" role="status">{favoriteError}</p>}
 
         {productLink ? (
           <a

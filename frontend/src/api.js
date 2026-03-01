@@ -29,7 +29,16 @@ async function refreshTokens(refreshToken) {
     return null;
   }
 
-  return response.json();
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    return null;
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
 }
 
 export async function authFetch(path, options = {}) {

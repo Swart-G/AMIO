@@ -2,6 +2,7 @@ services:
   postgres_db:
     image: postgres:15
     container_name: postgres_db
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -19,18 +20,39 @@ services:
   auth_service:
     build: ./backend/auth_service
     container_name: auth_service
+    restart: unless-stopped
     command: uvicorn main:app --host 0.0.0.0 --port 8001
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres_db:
         condition: service_healthy
     networks:
       - api_network
 
+  favorites_price_worker:
+    build: ./backend/auth_service
+    container_name: favorites_price_worker
+    restart: unless-stopped
+    command: python worker.py
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      marketplace_service:
+        condition: service_started
+    networks:
+      - api_network
+
   marketplace_service:
     build: ./backend/marketplace_service
     container_name: marketplace_service
+    restart: unless-stopped
     env_file:
       - .env
     network_mode: host
@@ -40,6 +62,7 @@ services:
       context: .
       dockerfile: nginx/Dockerfile
     container_name: nginx
+    restart: unless-stopped
     ports:
       - "8000:80"
     extra_hosts:

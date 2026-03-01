@@ -74,7 +74,7 @@ function parseReviews(value) {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
-function ProductGrid({ searchQuery }) {
+function ProductGrid({ searchQuery, onAuthOpen }) {
   const [products, setProducts] = useState([]);
   const [sortType, setSortType] = useState(SORT_TYPE_DEFAULT);
   const [sortDirection, setSortDirection] = useState(SORT_DIRECTION_DESC);
@@ -84,10 +84,10 @@ function ProductGrid({ searchQuery }) {
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
 
-  const loadMoreRef = useRef(null);
   const sortMenuRef = useRef(null);
   const requestSeqRef = useRef(0);
   const productsCacheRef = useRef(new Map());
+  const loadMoreInFlightRef = useRef(false);
   const query = (searchQuery || '').trim();
   const isSearchMode = query !== '';
   const activeSortType = useMemo(
@@ -147,6 +147,7 @@ function ProductGrid({ searchQuery }) {
     const cachedState = productsCacheRef.current.get(cacheKey);
 
     if (cachedState) {
+      loadMoreInFlightRef.current = false;
       setProducts(cachedState.products);
       setOffset(cachedState.offset);
       setHasMore(cachedState.hasMore);
@@ -157,6 +158,7 @@ function ProductGrid({ searchQuery }) {
 
     if (!query) {
       const fetchHomepage = async () => {
+        loadMoreInFlightRef.current = false;
         setProducts([]);
         setOffset(0);
         setHasMore(false);
@@ -204,6 +206,7 @@ function ProductGrid({ searchQuery }) {
     }
 
     const fetchInitial = async () => {
+      loadMoreInFlightRef.current = false;
       setProducts([]);
       setOffset(0);
       setHasMore(false);
@@ -254,67 +257,72 @@ function ProductGrid({ searchQuery }) {
   }, [query]);
 
   useEffect(() => {
-    if (!hasMore || isLoadingInitial || isLoadingMore) return;
-    if (typeof IntersectionObserver === 'undefined') return;
+    if (!hasMore || isLoadingInitial || loadMoreInFlightRef.current) return undefined;
 
-    const target = loadMoreRef.current;
-    if (!target) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    const seq = requestSeqRef.current;
+    const requestOffset = offset;
 
-    const observer = new IntersectionObserver(
-      async (entries) => {
-        const entry = entries[0];
-        if (!entry?.isIntersecting) return;
-        if (isLoadingInitial || isLoadingMore || !hasMore) return;
+    const fetchNextPage = async () => {
+      loadMoreInFlightRef.current = true;
+      setIsLoadingMore(true);
 
-        setIsLoadingMore(true);
-        const seq = requestSeqRef.current;
+      try {
+        const url = query
+          ? `/api/products?q=${encodeURIComponent(query)}&limit=${PAGE_SIZE}&offset=${requestOffset}`
+          : `/api/homepage-products?limit=${PAGE_SIZE}&offset=${requestOffset}`;
+        const response = await fetch(url, { signal: controller.signal });
 
-        try {
-          const requestOffset = offset;
-          const url = query
-            ? `/api/products?q=${encodeURIComponent(query)}&limit=${PAGE_SIZE}&offset=${requestOffset}`
-            : `/api/homepage-products?limit=${PAGE_SIZE}&offset=${requestOffset}`;
-          const response = await fetch(url);
-
-          if (!response.ok) {
-            throw new Error(`Ошибка сети: ${response.status}`);
-          }
-
-          const data = await response.json();
-          if (requestSeqRef.current !== seq) return;
-
-          const productsList = extractProductsList(data);
-          const hasMoreFlag = typeof data?.has_more === 'boolean'
-            ? data.has_more
-            : productsList.length === PAGE_SIZE;
-          const nextOffset = requestOffset + productsList.length;
-          const cacheKey = getProductsCacheKey(query);
-
-          setProducts((prev) => {
-            const mergedProducts = mergeUniqueProducts(prev, productsList);
-            productsCacheRef.current.set(cacheKey, {
-              products: mergedProducts,
-              offset: nextOffset,
-              hasMore: hasMoreFlag,
-            });
-            return mergedProducts;
-          });
-          setHasMore(hasMoreFlag);
-          setOffset(nextOffset);
-        } catch (error) {
-          console.error('Ошибка загрузки:', error);
-        } finally {
-          if (requestSeqRef.current === seq) {
-            setIsLoadingMore(false);
-          }
+        if (!response.ok) {
+          throw new Error(`Ошибка сети: ${response.status}`);
         }
-      },
-      { rootMargin: '220px' }
-    );
 
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [query, hasMore, isLoadingInitial, isLoadingMore, offset]);
+        const data = await response.json();
+        if (cancelled || requestSeqRef.current !== seq) return;
+
+        const productsList = extractProductsList(data);
+        const hasMoreFlag = typeof data?.has_more === 'boolean'
+          ? data.has_more
+          : productsList.length === PAGE_SIZE;
+        const nextOffset = requestOffset + productsList.length;
+        const cacheKey = getProductsCacheKey(query);
+
+        setProducts((prev) => {
+          const mergedProducts = mergeUniqueProducts(prev, productsList);
+          productsCacheRef.current.set(cacheKey, {
+            products: mergedProducts,
+            offset: nextOffset,
+            hasMore: hasMoreFlag,
+          });
+          return mergedProducts;
+        });
+        setHasMore(hasMoreFlag);
+        setOffset(nextOffset);
+      } catch (error) {
+        if (error.name === 'AbortError') return;
+        console.error('Ошибка загрузки:', error);
+        if (!cancelled && requestSeqRef.current === seq) {
+          setHasMore(false);
+        }
+      } finally {
+        if (!cancelled) {
+          loadMoreInFlightRef.current = false;
+        }
+        if (!cancelled && requestSeqRef.current === seq) {
+          setIsLoadingMore(false);
+        }
+      }
+    };
+
+    fetchNextPage();
+
+    return () => {
+      cancelled = true;
+      loadMoreInFlightRef.current = false;
+      controller.abort();
+    };
+  }, [query, hasMore, isLoadingInitial, offset]);
 
   const displayedProducts = useMemo(() => {
     if (!isSearchMode || sortType === SORT_TYPE_DEFAULT) {
@@ -428,7 +436,11 @@ function ProductGrid({ searchQuery }) {
 
       {!isLoadingInitial && displayedProducts.length > 0 &&
         displayedProducts.map((item, index) => (
-          <ProductCard key={item.url || item.id || `${item.name}-${index}`} product={item} />
+          <ProductCard
+            key={item.url || item.id || `${item.name}-${index}`}
+            product={item}
+            onAuthOpen={onAuthOpen}
+          />
         ))}
 
       {shouldShowNotFound && (
@@ -442,7 +454,6 @@ function ProductGrid({ searchQuery }) {
         </p>
       )}
 
-      {hasMore && <div ref={loadMoreRef} className="grid-load-more" aria-hidden="true" />}
       {showLoadMoreSkeletons && Array.from({ length: LOAD_MORE_SKELETON_COUNT }).map((_, index) => (
         <div className="product-card-skeleton" key={`load-more-skeleton-${index}`} aria-hidden="true">
           <div className="skeleton-image" />
